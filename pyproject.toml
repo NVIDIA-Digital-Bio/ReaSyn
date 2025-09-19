@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "reasyn"
+version = "0.1.0"
+description = "ReaSyn code"
+authors = ["NVIDIA corp"]
+license = "Apache 2.0"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "3.10.17"
+pip = "25.1"
+omegaconf = "2.3.0"
+torch = "2.7.0"
+transformers = "4.53.2"
+wandb = "0.19.11"
+pandas = "2.3.1"
+click = "8.2.1"
+tqdm = "4.67.1"
+mypy = "1.15.0"
+pyyaml = "6.0.2"
+datasets = "4.0.0"
+pytdc = "0.4.1"
+pytorch-lightning = "2.5.3"
+rdkit = "2025.3.2"
+numpy = "1.26.4"
+scikit-learn = "1.2.2"
+editdistance = "0.8.1"
+torchtyping = "0.1.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

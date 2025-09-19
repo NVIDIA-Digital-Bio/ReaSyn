@@ -1,0 +1,49 @@
+chem:
+  fp_option:
+    type: morgan
+    morgan_radius: 2
+    morgan_n_bits: 2048
+  building_block_path: data/building_blocks/building_blocks.txt
+  reaction_path: data/rxn_templates/comprehensive.txt
+  rxn_matrix: data/processed/comp_2048/matrix.pkl
+  fpindex: data/processed/comp_2048/fpindex.pkl
+
+data:
+  data_type: train
+  init_stack_weighted_ratio: 0.90
+
+model:
+  model_type: autoregressive
+  encoder:
+    num_token_types: 200
+    d_model: 768
+    nhead: 16
+    dim_feedforward: 4096
+    num_layers: 6
+    pe_max_len: 256
+  decoder:
+    d_model: 768
+    nhead: 16
+    dim_feedforward: 4096
+    num_layers: 10
+    pe_max_len: 768
+    output_norm: false
+
+train:
+  loss_weights:
+    smiles: 1.0
+    other: 1.0
+  max_iters: 500000
+  val_freq: 5000
+  max_grad_norm: 100.0
+  optimizer:
+    type: adamw
+    lr: 3.e-4
+    weight_decay: 0
+    beta1: 0.9
+    beta2: 0.999
+  scheduler:
+    type: plateau
+    factor: 0.8
+    patience: 10
+    min_lr: 1.e-5

@@ -1,0 +1,15 @@
+Name: GA
+License: license_thirdparty/LICENSE_GA
+URL: https://github.com/jensengroup/GB_GA/
+
+Name: GRPO
+License: license_thirdparty/LICENSE_GRPO
+URL: https://github.com/huggingface/trl/blob/fe4b5efe4e23f4331ba9c5b0c8bd92dc8302c287/trl/trainer/grpo_trainer.py
+
+Name: PMO
+License: license_thirdparty/LICENSE_PMO
+URL: https://github.com/wenhao-gao/mol_opt/
+
+Name: SYNFORMER
+License: license_thirdparty/LICENSE_SYNFORMER
+URL: https://github.com/wenhao-gao/synformer/

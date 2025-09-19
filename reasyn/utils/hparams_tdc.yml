@@ -1,0 +1,13 @@
+amlodipine_mpo: 1e-5
+celecoxib_rediscovery: 1e-5
+drd2: 5e-5
+fexofenadine_mpo: 1e-3
+gsk3b: 1e-4
+jnk3: 1e-5
+median1: 1e-5
+median2: 1e-5
+osimertinib_mpo: 1e-5
+perindopril_mpo: 5e-5
+ranolazine_mpo: 1e-4
+sitagliptin_mpo: 1e-4
+zaleplon_mpo: 5e-5

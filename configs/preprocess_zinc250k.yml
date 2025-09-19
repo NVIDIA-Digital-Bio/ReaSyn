@@ -1,0 +1,8 @@
+chem:
+  fp_option:
+    type: morgan
+    morgan_radius: 2
+    morgan_n_bits: 2048
+  building_block_path: data/building_blocks/building_blocks_zinc250k.txt
+  reaction_path: data/rxn_templates/comprehensive.txt
+  fpindex: data/processed/zinc250k_2048/fpindex.pkl
