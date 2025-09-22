@@ -1,6 +1,6 @@
 <h1 align="center">Rethinking Molecule Synthesizability with Chain-of-Reaction</h1>
 
-This is the official code repository for the paper titled [Rethinking Molecule Synthesizability with Chain-of-Reaction]().
+This is the official code repository for the paper titled [Rethinking Molecule Synthesizability with Chain-of-Reaction](https://arxiv.org/abs/2509.16084).
 
 <p align="center">
     <img width="750" src="assets/concept.png"/>
