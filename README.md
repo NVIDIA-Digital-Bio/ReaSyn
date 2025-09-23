@@ -33,7 +33,7 @@ python scripts/preprocess.py --model-config configs/train.yml
 ```
 
 Alternatively, you can directly use preprocessed building block data.<br>
-To resolve pickle path compatibility, first clone the [SynFormer](https://github.com/wenhao-gao/synformer) repository in this directory:
+To resolve pickle path compatibility, first clone the [SynFormer](https://github.com/wenhao-gao/synformer) repository into the top-level directory for ReaSyn (`/ReaSyn`):
 ```bash
 git clone https://github.com/wenhao-gao/synformer.git
 cd synformer
@@ -61,7 +61,7 @@ python scripts/preprocess.py --model-config configs/preprocess_zinc250k.yml
 
 ## Training
 
-We provide the trained [checkpoint](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/collections/reasyn). Place `model.ckpt` in the `data/trained_model` directory.
+We provide the [trained model checkpoint](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=1.0). Place `model.ckpt` in the `data/trained_model` directory.
 
 ### Supervised Learning
 Run the following command to perform supervised training of ReaSyn:
