@@ -61,7 +61,7 @@ python scripts/preprocess.py --model-config configs/preprocess_zinc250k.yml
 
 ## Training
 
-We provide the [trained model checkpoint](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=1.0). Place `model.ckpt` in the `data/trained_model` directory.
+We provide the [trained model checkpoint](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn). Place `model.ckpt` in the `data/trained_model` directory.
 
 ### Supervised Learning
 Run the following command to perform supervised training of ReaSyn:
