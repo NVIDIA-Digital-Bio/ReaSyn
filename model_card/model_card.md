@@ -20,7 +20,7 @@ Github 09/23/2025 via https://github.com/NVIDIA-Digital-Bio/ReaSyn <br>
 NGC 09/23/2025 via https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=1.0 <br> 
 
 ### References
-Research paper: “Rethinking Molecule Synthesizability with Chain-of-Reaction”, https://arxiv.org/abs/2509.16084
+Research paper: “Rethinking Molecule Synthesizability with Chain-of-Reaction”, https://arxiv.org/abs/2509.16084v1
 
 ### Model Architecture
 
