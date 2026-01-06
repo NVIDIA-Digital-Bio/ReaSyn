@@ -20,6 +20,7 @@ import re
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+from tdc import Evaluator
 from reasyn.chem.mol import Molecule
 
 
@@ -47,18 +48,21 @@ if __name__ == '__main__':
     print(f"Reconstruction rate: {count_recons}/{total} = {count_recons / total:.3f}")
 
     rxn_pattern = re.compile('R\d+')
-    num_good_pathways = defaultdict(int)
+    product_good_pathways = defaultdict(list)
     bb_good_pathways = defaultdict(set)
     for _, row in df.iterrows():
         if row["score"] >= 0.8:
-            num_good_pathways[row["target"]] += 1
+            product_good_pathways[row["target"]].append(row['smiles'])
             for mol_or_rxn in row['synthesis'].split(';'):
                 if not rxn_pattern.match(mol_or_rxn):
                     bb_good_pathways[row["target"]].add(Molecule(mol_or_rxn).csmiles)
-    num_good_pathways = list(num_good_pathways.values())
-    num_good_pathways += [0] * (total - len(num_good_pathways))
-    print(f"Mean # of sim > 0.8 pathways: {np.mean(num_good_pathways)}")
-
-    bb_good_pathways = [len(v) for v in bb_good_pathways.values()]
-    bb_good_pathways += [0] * (total - len(bb_good_pathways))
-    print(f"Mean # of unique BBs in sim > 0.8 pathways: {np.mean(bb_good_pathways)}")
+    
+    evaluator = Evaluator('diversity')
+    product_diversity = [evaluator(products) for products in product_good_pathways.values() if len(products) > 1]
+    product_diversity = [d for d in product_diversity if not np.isnan(d)]
+    product_diversity += [0] * (total - len(product_diversity))
+    print(f"Mean diversity of products in sim > 0.8 pathways: {np.mean(product_diversity):.3f}")
+    bb_diversity = [evaluator(bbs) for bbs in bb_good_pathways.values() if len(bbs) > 1]
+    bb_diversity = [d for d in bb_diversity if not np.isnan(d)]
+    bb_diversity += [0] * (total - len(bb_diversity))
+    print(f"Mean diversity of BBs in sim > 0.8 pathways: {np.mean(bb_diversity):.3f}")

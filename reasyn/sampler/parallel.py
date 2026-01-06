@@ -21,6 +21,7 @@ import pickle
 import subprocess
 from multiprocessing import synchronize as sync
 from typing import TypeAlias
+import time
 
 import numpy as np
 import pandas as pd
@@ -28,11 +29,12 @@ import torch
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 
+from reasyn.sampler.sampler import Sampler
 from reasyn.chem.fpindex import FingerprintIndex
 from reasyn.chem.matrix import ReactantReactionMatrix
 from reasyn.chem.mol import FingerprintOption, Molecule
 from reasyn.models.reasyn import ReaSyn
-from reasyn.sampler.state_pool import StatePool, TimeLimit
+from reasyn.utils.sample_utils import TimeLimit
 
 import warnings
 warnings.filterwarnings('ignore')
@@ -45,20 +47,22 @@ ResultQueueType: TypeAlias = "mp.Queue[tuple[Molecule, pd.DataFrame]]"
 class Worker(mp.Process):
     def __init__(
         self,
-        model_path: pathlib.Path,
+        model_path: pathlib.Path | list[pathlib.Path],
         task_queue: TaskQueueType,
         result_queue: ResultQueueType,
         gpu_id: str,
         gpu_lock: sync.Lock,
-        state_pool_opt: dict | None = None,
+        sampler_opt: dict | None = None,
         max_evolve_steps: int = 8,
         max_results: int = 100,
-        time_limit: int = 600,
+        time_limit: int = 1000,
         add_bb_path: str = None,
         verbose=True,
-        exact_break=False,
-        reward_model=None,
-        mols_to_filter=None,
+        exact_break=True,
+        num_cycles: int = 1,
+        num_editflow_samples: int = 10,
+        num_editflow_steps: int = 100,
+        mols_to_filter = None,
         filter_sim: float = 0.8
     ):
         super().__init__()
@@ -68,27 +72,32 @@ class Worker(mp.Process):
         self._gpu_id = gpu_id
         self._gpu_lock = gpu_lock
 
-        self._state_pool_opt = state_pool_opt or {}
+        self._sampler_opt = sampler_opt or {}
+        self._sampler_opt['exact_break'] = exact_break
         self._max_evolve_steps = max_evolve_steps
         self._max_results = max_results
         self._time_limit = time_limit
         self.add_bb_path = add_bb_path
         self.verbose = verbose
-        self.exact_break = exact_break
-        self.reward_model = reward_model
+        self.num_cycles = num_cycles
+        self.num_editflow_samples = num_editflow_samples
+        self.num_editflow_steps = num_editflow_steps
         self.mols_to_filter = mols_to_filter
         self.filter_sim = filter_sim
 
     def run(self) -> None:
         os.sched_setaffinity(0, range(os.cpu_count() or 1))
-        os.environ["CUDA_VISIBLE_DEVICES"] = self._gpu_id
-
-        ckpt = torch.load(self._model_path, map_location="cpu")
-        config = OmegaConf.create(ckpt["hyper_parameters"]["config"])
-        model = ReaSyn(config.model).to("cuda")
-        model.load_state_dict({k[6:]: v for k, v in ckpt["state_dict"].items()})
-        model.eval()
-        self._model = model
+        
+        assert isinstance(self._model_path, list) and len(self._model_path) == 2
+    
+        self._model = []
+        for _model_path in self._model_path:
+            ckpt = torch.load(_model_path, map_location="cpu")
+            config = OmegaConf.create(ckpt["hyper_parameters"]["config"])
+            _model = ReaSyn(config.model).to(f"cuda:{self._gpu_id}")
+            _model.load_state_dict({k[6:]: v for k, v in ckpt["state_dict"].items()})
+            _model.eval()
+            self._model.append(_model)
         
         self._fpindex: FingerprintIndex = pickle.load(open(config.chem.fpindex, "rb"))
         self._rxn_matrix: ReactantReactionMatrix = pickle.load(open(config.chem.rxn_matrix, "rb"))
@@ -96,49 +105,52 @@ class Worker(mp.Process):
             _fpindex_add = pickle.load(open(self.add_bb_path, "rb"))
             num_orig_bb = len(self._fpindex._molecules)
             self._fpindex._molecules += _fpindex_add._molecules
+            self._fpindex._smiles += _fpindex_add._smiles
             self._fpindex._fp = np.vstack([self._fpindex._fp, _fpindex_add._fp])
             if self.verbose:
                 print(f'BB expanded: {num_orig_bb} -> {len(self._fpindex._molecules)}')
-                
-        try:
-            while True:
-                next_task = self._task_queue.get()
-                if next_task is None:
-                    self._task_queue.task_done()
-                    break
+
+        while True:
+            next_task = self._task_queue.get()
+            if next_task is None:
+                self._task_queue.task_done()
+                break
+            try:
                 result_df = self.process(next_task)
                 self._task_queue.task_done()
                 self._result_queue.put((next_task, result_df))
-        except KeyboardInterrupt:
-            print(f"{self.name}: Exiting due to KeyboardInterrupt")
-            return
-        
+            except KeyboardInterrupt:
+                print(f"{self.name}: Exiting due to KeyboardInterrupt")
+                return
+            
     def process(self, mol: Molecule):
-        sampler = StatePool(
+        sampler = Sampler(
             fpindex=self._fpindex,
             rxn_matrix=self._rxn_matrix,
             mol=mol,
             model=self._model,
-            **self._state_pool_opt,
+            **self._sampler_opt,
         )
 
         tl = TimeLimit(self._time_limit)
-        for _ in range(self._max_evolve_steps):
-            sampler.evolve(gpu_lock=self._gpu_lock, time_limit=tl, reward_model=self.reward_model)
+        t_start = time.time()
+        try:
+            sampler.evolve(gpu_lock=self._gpu_lock, time_limit=tl,
+                            num_cycles=self.num_cycles,
+                            max_evolve_steps=self._max_evolve_steps,
+                            num_editflow_samples=self.num_editflow_samples,
+                            num_editflow_steps=self.num_editflow_steps)
+            t_elapsed = time.time() - t_start
+            df = sampler.get_dataframe()[: self._max_results]
+            df['time'] = t_elapsed
+            return df
             
-            if self.exact_break:
-                max_sim = max(
-                    [
-                        p.molecule.sim(mol, FingerprintOption.morgan_for_tanimoto_similarity())
-                        for p in sampler.get_products()
-                    ]
-                    or [-1]
-                )
-                if max_sim == 1.0:
-                    break
-
-        df = sampler.get_dataframe()[: self._max_results]
-        return df
+        except KeyboardInterrupt:
+            raise KeyboardInterrupt
+        
+        except Exception as e:
+            print(f'{mol.csmiles}')
+            print(e)
         
 
 class WorkerPool:
@@ -204,18 +216,20 @@ def _count_gpus():
 def run_parallel_sampling(
     input: list[Molecule],
     output: pathlib.Path,
-    model_path: pathlib.Path,
+    model_path: pathlib.Path | list[pathlib.Path],
     search_width: int = 24,
     exhaustiveness: int = 64,
     num_gpus: int = -1,
     num_workers_per_gpu: int = 8,
     task_qsize: int = 0,
     result_qsize: int = 0,
-    time_limit: int = 600,
-    sort_by_scores: bool = True,
+    time_limit: int = 1000,
     add_bb_path: str = None,
-    reward_model=None,
-    mols_to_filter=None,
+    exact_break: bool = True,
+    num_cycles: int = 1,
+    num_editflow_samples: int = 10,
+    num_editflow_steps: int = 100,
+    mols_to_filter = None,
     filter_sim: float = 0.8
 ) -> None:
     num_gpus = num_gpus if num_gpus > 0 else _count_gpus()
@@ -226,16 +240,18 @@ def run_parallel_sampling(
         task_qsize=task_qsize,
         result_qsize=result_qsize,
         model_path=model_path,
-        state_pool_opt={
+        sampler_opt={
             "factor": search_width,
             "max_active_states": exhaustiveness,
-            "sort_by_score": sort_by_scores,
             "mols_to_filter": mols_to_filter,
             "filter_sim": filter_sim
         },
         time_limit=time_limit,
         add_bb_path=add_bb_path,
-        reward_model=reward_model,
+        exact_break=exact_break,
+        num_cycles=num_cycles,
+        num_editflow_samples=num_editflow_samples,
+        num_editflow_steps=num_editflow_steps,
         mols_to_filter=mols_to_filter,
         filter_sim=filter_sim
     )
@@ -249,43 +265,47 @@ def run_parallel_sampling(
     with open(output, "w") as f:
         for _ in tqdm(range(total)):
             _, df = pool.fetch()
-            if len(df) == 0:
+            if df is None or len(df) == 0:
                 continue
             df.to_csv(f, float_format="%.3f", index=False, header=f.tell() == 0)
             df_all.append(df)
-            
-    df_merge = pd.concat(df_all, ignore_index=True)
-    print(df_merge.loc[df_merge.groupby("target").idxmax()["score"]].select_dtypes(include="number").sum() / total)
 
-    count_success = len(df_merge["target"].unique())
-    print(f"Success rate: {count_success}/{total} = {count_success / total:.3f}")
-
-    recons_targets: set[str] = set()
-    for _, row in df_merge.iterrows():
-        if row["score"] == 1.0:
-            mol_target = Molecule(row["target"])
-            mol_recons = Molecule(row["smiles"])
-            if mol_recons.csmiles == mol_target.csmiles:
-                recons_targets.add(row["target"])
-    count_recons = len(recons_targets)
-    print(f"Reconstruction rate: {count_recons}/{total} = {count_recons / total:.3f}")
-
+    if not df_all:
+        msg = "Success rate: 0\n"
+    else:
+        df_merge = pd.concat(df_all, ignore_index=True)
+        # canonicalize
+        df_merge['target'] = df_merge['target'].apply(lambda s: Molecule(s).csmiles)
+        df_merge['smiles'] = df_merge['smiles'].apply(lambda s: Molecule(s).csmiles)
+        df_merge = df_merge.drop_duplicates()
+        with open(output, "w") as f:
+            df_merge.to_csv(f, float_format="%.3f", index=False)
+        
+        msg = f'{df_merge.loc[df_merge.groupby("target").idxmax()["score"]].select_dtypes(include="number").sum() / total}\n'
+        count_success = len(df_merge["target"].unique())
+        msg += f"Success rate: {count_success}/{total} = {count_success / total:.3f}\n"
+        df_merge = df_merge[df_merge['target'] == df_merge['smiles']]
+        df_merge = df_merge.drop_duplicates('target')
+        count_recons = len(df_merge)
+        msg += f"Reconstruction rate: {count_recons}/{total} = {count_recons / total:.3f}\n"
+    print(msg)
     pool.end()
 
 
 def run_parallel_sampling_return_smiles(
     input: list[Molecule],
-    model_path: pathlib.Path,
+    model_path: pathlib.Path | list[pathlib.Path],
     search_width: int = 24,
     exhaustiveness: int = 64,
     num_gpus: int = -1,
-    num_workers_per_gpu: int = 6,
+    num_workers_per_gpu: int = 8,
     task_qsize: int = 0,
     result_qsize: int = 0,
-    time_limit: int = 600,
-    sort_by_scores: bool = True,
+    time_limit: int = 1000,
     add_bb_path: str = None,
-    reward_model=None,
+    num_cycles: int = 1,
+    num_editflow_samples: int = 10,
+    num_editflow_steps: int = 100,
     mols_to_filter=None,
     filter_sim: float = 0.8
 ) -> None:
@@ -297,10 +317,9 @@ def run_parallel_sampling_return_smiles(
         task_qsize=task_qsize,
         result_qsize=result_qsize,
         model_path=model_path,
-        state_pool_opt={
+        sampler_opt={
             "factor": search_width,
             "max_active_states": exhaustiveness,
-            "sort_by_score": sort_by_scores,
             "mols_to_filter": mols_to_filter,
             "filter_sim": filter_sim
         },
@@ -308,7 +327,9 @@ def run_parallel_sampling_return_smiles(
         add_bb_path=add_bb_path,
         verbose=False,
         exact_break=True,
-        reward_model=reward_model
+        num_cycles=num_cycles,
+        num_editflow_samples=num_editflow_samples,
+        num_editflow_steps=num_editflow_steps
     )
 
     total = len(input)
@@ -319,7 +340,7 @@ def run_parallel_sampling_return_smiles(
 
     for _ in tqdm(range(total)):
         _, df = pool.fetch()
-        if len(df) == 0:
+        if df is None or len(df) == 0:
             continue
         df_all.append(df)
 
@@ -331,54 +352,64 @@ def run_parallel_sampling_return_smiles(
 
 def run_sampling_one(
     input: Molecule,
-    model_path: pathlib.Path,
-    sort_by_scores: bool = True,
+    model_path: pathlib.Path | list[pathlib.Path, pathlib.Path],
     search_width: int = 24,
     exhaustiveness: int = 64,
     max_evolve_steps: int = 8,
     max_results: int = 100,
-    time_limit: int = 600,
+    time_limit: int = 1000,
     add_bb_path: pathlib.Path = None,
     device='cuda',
-    reward_model=None,
+    num_cycles: int = 1,
+    num_editflow_samples: int = 10,
+    num_editflow_steps: int = 100,
     mols_to_filter=None,
     filter_sim=0.8
 ) -> pd.DataFrame:
 
-    ckpt = torch.load(model_path, map_location="cpu")
-    config = OmegaConf.create(ckpt["hyper_parameters"]["config"])
-    model = ReaSyn(config.model).to(device)
-    model.load_state_dict({k[6:]: v for k, v in ckpt["state_dict"].items()})
-    model.eval()
-    _model = model
+    assert isinstance(model_path, list) and len(model_path) == 2
     
-    state_pool_opt={
+    model = []
+    for _model_path in model_path:
+        ckpt = torch.load(_model_path, map_location="cpu")
+        config = OmegaConf.create(ckpt["hyper_parameters"]["config"])
+        _model = ReaSyn(config.model).to(device)
+        _model.load_state_dict({k[6:]: v for k, v in ckpt["state_dict"].items()})
+        _model.eval()
+        model.append(_model)
+    
+    sampler_opt={
         "factor": search_width,
         "max_active_states": exhaustiveness,
-        "sort_by_score": sort_by_scores,
         "mols_to_filter": mols_to_filter,
         "filter_sim": filter_sim
     }
+
     _fpindex: FingerprintIndex = pickle.load(open(config.chem.fpindex, "rb"))
     _rxn_matrix: ReactantReactionMatrix = pickle.load(open(config.chem.rxn_matrix, "rb"))
     if add_bb_path:
         _fpindex_add = pickle.load(open(add_bb_path, "rb"))
         num_orig_bb = len(_fpindex._molecules)
         _fpindex._molecules += _fpindex_add._molecules
+        _fpindex._smiles += _fpindex_add._smiles
         _fpindex._fp = np.vstack([_fpindex._fp, _fpindex_add._fp])
         print(f'BB expanded: {num_orig_bb} -> {len(_fpindex._molecules)}')
-
-    sampler = StatePool(
+    
+    sampler = Sampler(
         fpindex=_fpindex,
         rxn_matrix=_rxn_matrix,
         mol=input,
-        model=_model,
-        **state_pool_opt,
+        model=model,
+        **sampler_opt,
     )
-    
     tl = TimeLimit(time_limit)
-    for _ in range(max_evolve_steps):
-        sampler.evolve(gpu_lock=None, time_limit=tl, reward_model=reward_model)
-        
+    t_start = time.time()
+    sampler.evolve(gpu_lock=None, time_limit=tl,
+                    num_cycles=num_cycles,
+                    max_evolve_steps=max_evolve_steps,
+                    num_editflow_samples=num_editflow_samples,
+                    num_editflow_steps=num_editflow_steps)
+    t_elapsed = time.time() - t_start
     df = sampler.get_dataframe()[: max_results]
+    df['time'] = t_elapsed
     return df

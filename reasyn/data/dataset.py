@@ -21,30 +21,42 @@ from typing import cast
 import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader, IterableDataset
+from datasets import load_dataset
 
 from reasyn.chem.fpindex import FingerprintIndex
 from reasyn.chem.matrix import ReactantReactionMatrix
-from reasyn.chem.stack import create_stack_step_by_step
-from reasyn.utils.train import worker_init_fn
+from reasyn.chem.stack import Stack, create_stack_step_by_step
+from reasyn.utils.train_utils import worker_init_fn
 
 from .collate import (
     apply_collate,
     collate_padding_masks,
     collate_tokens,
+    collate_tokens_editflow
 )
 from .common import create_data
 
 
 class Collater:
-    def __init__(self, max_num_atoms: int = 96, max_smiles_len: int = 256, max_num_tokens: int = 24, data_type = None):
+    def __init__(
+        self,
+        model_type,
+        max_num_atoms: int = 96,
+        max_smiles_len: int = 256,
+        max_num_tokens: int = 24
+    ):
         super().__init__()
         self.max_num_atoms = max_num_atoms
         self.max_smiles_len = max_smiles_len
         self.max_num_tokens = max_num_tokens
 
         self.spec_smiles = {"smiles": collate_tokens}
-        if data_type == 'finetune':
-            self.spec_tokens = {}
+        if model_type == 'editflow':
+            self.spec_tokens = {
+                "tokens": collate_tokens_editflow,
+                "rxn_mask": collate_padding_masks,
+                "token_padding_mask": collate_padding_masks,
+            }
         else:
             self.spec_tokens = {
                 "tokens": collate_tokens,
@@ -58,8 +70,6 @@ class Collater:
             **apply_collate(self.spec_smiles, data_list_t, max_size=self.max_smiles_len),
             **apply_collate(self.spec_tokens, data_list_t, max_size=self.max_num_tokens),
         }
-        if 'smiles_raw' in data_list[0]:  # data_type == 'finetune'
-            batch['smiles_raw'] = [d['smiles_raw'] for d in data_list]
         return batch
 
 
@@ -74,7 +84,6 @@ class ProjectionDataset(IterableDataset):
         max_num_reactions: int = 5,
         init_stack_weighted_ratio: float = 0.0,
         virtual_length: int = 65536,
-        data_type: str = 'train',
     ) -> None:
         super().__init__()
         self._reaction_matrix = reaction_matrix
@@ -85,7 +94,6 @@ class ProjectionDataset(IterableDataset):
         self._fpindex = fpindex
         self._init_stack_weighted_ratio = init_stack_weighted_ratio
         self._virtual_length = virtual_length
-        self._data_type = data_type
 
     def __len__(self) -> int:
         return self._virtual_length
@@ -106,7 +114,6 @@ class ProjectionDataset(IterableDataset):
                     product=product,
                     mol_seq=mol_seq_full,
                     rxn_idx_seq=rxn_idx_seq_full,
-                    data_type=self._data_type
                 )
                 data["smiles"] = data["smiles"][: self._max_smiles_len]
                 yield data
@@ -118,6 +125,7 @@ class ProjectionDataModule(pl.LightningDataModule):
         config,
         batch_size: int,
         num_workers: int = 4,
+        data_path = None,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -125,14 +133,10 @@ class ProjectionDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.dataset_options = kwargs
-        self.collater_options = {'data_type': kwargs.get('data_type'),
+        self.collater_options = {'model_type': config.model.model_type,
                                  'max_num_tokens': config.model.decoder.pe_max_len}
 
     def setup(self, stage: str | None = None) -> None:
-        trainer = self.trainer
-        if trainer is None:
-            raise RuntimeError("The trainer is missing.")
-
         if not os.path.exists(self.config.chem.rxn_matrix):
             raise FileNotFoundError(
                 f"Reaction matrix not found: {self.config.chem.rxn_matrix}. "
@@ -145,7 +149,7 @@ class ProjectionDataModule(pl.LightningDataModule):
             )
 
         with open(self.config.chem.rxn_matrix, "rb") as f:
-            rxn_matrix = pickle.load(f)
+            rxn_matrix: ReactantReactionMatrix = pickle.load(f)
 
         with open(self.config.chem.fpindex, "rb") as f:
             fpindex = pickle.load(f)
@@ -181,5 +185,64 @@ class ProjectionDataModule(pl.LightningDataModule):
             num_workers=1,
             collate_fn=Collater(**self.collater_options),
             worker_init_fn=worker_init_fn,
+            persistent_workers=True,
+        )
+
+
+class EditFlowCollater:
+    def __init__(self, collate_keys, max_num_tokens: int = 24):
+        super().__init__()
+        self.max_num_tokens = max_num_tokens
+        self.spec_tokens = {k: collate_tokens_editflow for k in collate_keys}
+        
+    def __call__(self, data_list):
+        batch = {**apply_collate(self.spec_tokens, data_list, max_size=self.max_num_tokens)}
+        return batch
+    
+
+class EditFlowDataModule(pl.LightningDataModule):
+    def __init__(
+        self,
+        config,
+        batch_size: int,
+        num_workers: int = 4,
+        train_shuffle: bool = True,
+        data_path: str = None,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.train_shuffle = train_shuffle
+        self.data_path = data_path
+        
+    def setup(self, stage: str | None = None) -> None:
+        self.train_dataset = load_dataset(self.data_path,
+                                          split='train', streaming=True).with_format('torch')
+        if self.train_shuffle:
+            self.train_dataset = self.train_dataset.shuffle(buffer_size=100_000)
+        self.val_dataset = load_dataset(self.data_path,
+                                        split='train', streaming=True).with_format('torch')
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            drop_last=True,
+            collate_fn=EditFlowCollater(collate_keys=next(iter(self.train_dataset)).keys(),
+                                        max_num_tokens=self.config.model.decoder.pe_max_len),
+            worker_init_fn=worker_init_fn,
+            persistent_workers=True,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=1,
+            num_workers=1,
+            collate_fn=EditFlowCollater(collate_keys=next(iter(self.train_dataset)).keys(),
+                                        max_num_tokens=self.config.model.decoder.pe_max_len),
             persistent_workers=True,
         )

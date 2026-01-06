@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 
 import torch
 import torch.nn.functional as F
+from reasyn.chem.featurize import TokenType
 
 
 def collate_tokens(features: Sequence[torch.Tensor], max_size: int) -> torch.Tensor:
@@ -24,23 +25,9 @@ def collate_tokens(features: Sequence[torch.Tensor], max_size: int) -> torch.Ten
     return torch.stack(features_padded, dim=0)
 
 
-def collate_2d_tokens(features: Sequence[torch.Tensor], max_size: int) -> torch.Tensor:
-    features_padded = [
-        F.pad(f, pad=[0, max_size - f.size(-1), 0, max_size - f.size(-2)], mode="constant", value=0) for f in features
-    ]
-    return torch.stack(features_padded, dim=0)
-
-
-def collate_1d_features(features: Sequence[torch.Tensor], max_size: int) -> torch.Tensor:
-    features_padded = [F.pad(f, pad=[0, 0, 0, max_size - f.size(-2)], mode="constant", value=0) for f in features]
-    return torch.stack(features_padded, dim=0)
-
-
-def collate_2d_features(features: Sequence[torch.Tensor], max_size: int) -> torch.Tensor:
-    features_padded = [
-        F.pad(f, pad=[0, 0, 0, max_size - f.size(-2), 0, max_size - f.size(-3)], mode="constant", value=0)
-        for f in features
-    ]
+def collate_tokens_editflow(features: Sequence[torch.Tensor], max_size: int) -> torch.Tensor:
+    max_size = max([f.size(-1) for f in features])
+    features_padded = [F.pad(f, pad=[0, max_size - f.size(-1)], mode="constant", value=0) for f in features]
     return torch.stack(features_padded, dim=0)
 
 

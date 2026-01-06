@@ -17,25 +17,22 @@ import sys
 sys.path.append('.')
 from time import time
 from reasyn.sampler.parallel import run_sampling_one
-from reasyn.chem.mol import Molecule, read_mol_file
-
-
-def _input_mols_option(p):
-    return list(read_mol_file(p))
+from reasyn.chem.mol import Molecule
 
 
 if __name__ == "__main__":
     # input = Molecule('Fc1cscc1CN1CCC(C2CCCOC2)CC1')
-    # input = Molecule('CN(CCNC(=O)CC1CCC2(CC1)CCC2O)C(=O)c1cccc2ncnn12')
-    # input = Molecule('CCCC[C@H](NC(=O)[C@H](CCCCN)NC(=O)[C@H](CCCNC(=N)N)NC(=O)c1ccc(/C=C2\SC(=O)N(c3ccc(C)cc3)C2=O)cc1)C(N)=O')
     input = Molecule('O=C(Nc1ccc(F)cc1)N(Cc1noc(C2CC2)n1)c1ccc(Cl)cc1Cl')
     
     t_start = time()
     df = run_sampling_one(
         input=input,
-        model_path='data/trained_model/NV-ReaSyn-AR-166M-v1.ckpt',
-        exhaustiveness=1,
-        search_width=1,
+        model_path=['data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt', 'data/trained_model/NV-ReaSyn-EB-174M-v2.ckpt'],
+        exhaustiveness=4,
+        search_width=2,
+        num_cycles=2,
+        num_editflow_samples=100,
+        num_editflow_samples=10,
     )
     print(df)
     print(f'{time() - t_start:.2f} sec elapsed')

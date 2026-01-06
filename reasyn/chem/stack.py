@@ -65,6 +65,7 @@ class Stack:
         self._rxns: list[Reaction | None] = []
         self._tokens: list[_TokenType] = []
         self._stack: list[set[Molecule]] = []
+        self._seq_topdown = []
         
     @property
     def mols(self) -> tuple[Molecule, ...]:
@@ -90,16 +91,7 @@ class Stack:
     def get_third_top(self) -> set[Molecule]:
         return self._stack[-3]
 
-    def push_mol(self, mol: Molecule, index: int) -> None:
-        self._mols.append(mol)
-        self._rxns.append(None)
-        self._tokens.append((0, index))
-        self._stack.append({mol})
-        
-    def push_rxn(self, rxn: Reaction, index: int, product_limit: int | None = None) -> bool:
-        if len(self._stack) < rxn.num_reactants:
-            return False
-
+    def _run_rxn(self, rxn: Reaction, product_limit: int | None = None) -> list[Molecule]:
         prods: list[Molecule] = []
         if rxn.num_reactants == 1:
             for r in self.get_top():
@@ -121,9 +113,19 @@ class Stack:
                     + rxn([r3, r2, r1])
                     + rxn([r3, r1, r2])
                 )
-        else:
-            return False
+        return prods
 
+    def push_mol(self, mol: Molecule, index: int) -> None:
+        self._mols.append(mol)
+        self._rxns.append(None)
+        self._tokens.append((0, index))
+        self._stack.append({mol})
+        
+    def push_rxn(self, rxn: Reaction, index: int, product_limit: int | None = None) -> bool:
+        if len(self._stack) < rxn.num_reactants:
+            return False
+        
+        prods = self._run_rxn(rxn, product_limit)
         if len(prods) == 0:
             return False
         if product_limit is not None:
@@ -137,7 +139,32 @@ class Stack:
             self._stack.pop()
         self._stack.append(set(prods))
         return True
-
+    
+    def push_topdown(self, mol_or_rxn: Molecule | Reaction, index: int) -> None:
+        if isinstance(mol_or_rxn, Molecule):
+            self._mols.insert(0, mol_or_rxn)
+            self._tokens.insert(0, (0, index))
+        else:
+            self._mols.insert(0, None)
+            self._tokens.insert(0, (mol_or_rxn.num_reactants, index))
+        self._seq_topdown.append((mol_or_rxn, index))
+    
+    def final_seq_topdown(self) -> None:
+        self._mols = []
+        self._rxns = []
+        self._tokens = []
+        self._stack = []
+        
+        success = False
+        for mol_or_rxn, index in self._seq_topdown[::-1]:
+            if isinstance(mol_or_rxn, Molecule):
+                self.push_mol(mol_or_rxn, index)
+            else:
+                success = self.push_rxn(mol_or_rxn, index)
+                if not success:
+                    break
+        return success
+    
     def __len__(self) -> int:
         return len(self._mols)
 

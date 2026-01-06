@@ -1,13 +1,14 @@
-amlodipine_mpo: 1e-5
-celecoxib_rediscovery: 1e-5
-drd2: 5e-5
-fexofenadine_mpo: 1e-3
-gsk3b: 1e-4
-jnk3: 1e-5
-median1: 1e-5
-median2: 1e-5
-osimertinib_mpo: 1e-5
-perindopril_mpo: 5e-5
-ranolazine_mpo: 1e-4
-sitagliptin_mpo: 1e-4
-zaleplon_mpo: 5e-5
+search_width:
+  amlodipine_mpo: 2
+  celecoxib_rediscovery: 2
+  drd2: 1
+  fexofenadine_mpo: 2
+  gsk3b: 1
+  jnk3: 2
+  median1: 2
+  median2: 2
+  osimertinib_mpo: 2
+  perindopril_mpo: 1
+  ranolazine_mpo: 2
+  sitagliptin_mpo: 1
+  zaleplon_mpo: 1

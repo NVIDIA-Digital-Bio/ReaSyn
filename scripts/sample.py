@@ -28,23 +28,25 @@ def _input_mols_option(p):
 @click.command()
 @click.option("--input", "-i", type=_input_mols_option, required=True)
 @click.option("--output", "-o", type=click.Path(exists=False, path_type=pathlib.Path), required=True)
-@click.option("--model_path", "-m", type=click.Path(exists=True, path_type=pathlib.Path), required=True)
-@click.option("--search_width", type=int, default=12)
-@click.option("--exhaustiveness", type=int, default=32)
+@click.option("--model_path", "-m", type=str, required=True)
+@click.option("--search_width", type=int, default=4)
+@click.option("--exhaustiveness", type=int, default=8)
 @click.option("--num_gpus", type=int, default=-1)
 @click.option("--num_workers_per_gpu", type=int, default=8)
 @click.option("--task_qsize", type=int, default=0)
 @click.option("--result_qsize", type=int, default=0)
-@click.option("--time_limit", type=int, default=600)
-@click.option("--dont_sort", is_flag=True)
+@click.option("--time_limit", type=int, default=10000)
 @click.option("--add_bb_path", type=str, default=None)
-@click.option("--reward_model", type=str, default=None)
+@click.option("--no_exact_break", is_flag=True)
+@click.option("--num_cycles", type=int, default=1)
+@click.option("--num_editflow_samples", type=int, default=100)
+@click.option("--num_editflow_steps", type=int, default=100)
 @click.option("--mols_to_filter", type=str, default=None)
 @click.option("--filter_sim", type=float, default=0.8)
 def main(
     input: list[Molecule],
     output: pathlib.Path,
-    model_path: pathlib.Path,
+    model_path: str,
     search_width: int,
     exhaustiveness: int,
     num_gpus: int,
@@ -52,12 +54,17 @@ def main(
     task_qsize: int,
     result_qsize: int,
     time_limit: int,
-    dont_sort: bool,
-    add_bb_path: str,
-    reward_model: str,
+    add_bb_path: str | None,
+    no_exact_break: bool,
+    num_cycles: int,
+    num_editflow_samples: int,
+    num_editflow_steps: int,
     mols_to_filter: str,
     filter_sim: float
 ):
+    model_path = [pathlib.Path(path) for path in model_path.split(',')]
+    assert all([path.exists() for path in model_path])
+    
     run_parallel_sampling(
         input=input,
         output=output,
@@ -69,9 +76,11 @@ def main(
         task_qsize=task_qsize,
         result_qsize=result_qsize,
         time_limit=time_limit,
-        sort_by_scores=not dont_sort,
         add_bb_path=add_bb_path,
-        reward_model=reward_model,
+        exact_break=not no_exact_break,
+        num_cycles=num_cycles,
+        num_editflow_samples=num_editflow_samples,
+        num_editflow_steps=num_editflow_steps,
         mols_to_filter=_input_mols_option(mols_to_filter)
                        if mols_to_filter is not None else None,
         filter_sim=filter_sim

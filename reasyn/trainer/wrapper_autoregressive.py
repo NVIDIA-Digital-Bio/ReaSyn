@@ -14,46 +14,35 @@
 # limitations under the License.
 
 import pickle
-from typing import Any
 import pytorch_lightning as pl
 from omegaconf import OmegaConf
 from torch.nn import functional as F
 
 from reasyn.chem.fpindex import FingerprintIndex
 from reasyn.chem.matrix import ReactantReactionMatrix
-from reasyn.utils.train import get_optimizer, get_scheduler, sum_weighted_losses
+from reasyn.utils.train_utils import get_optimizer, get_scheduler, sum_weighted_losses
 from reasyn.models.reasyn import ReaSyn
 
 
 class Wrapper(pl.LightningModule):
-    def __init__(self, config, args: dict | None = None):
+    def __init__(self, config):
         super().__init__()
-        self.save_hyperparameters(
-            {
-                "config": OmegaConf.to_container(config),
-                "args": args or {},
-            }
-        )
+        self.save_hyperparameters({"config": OmegaConf.to_container(config)})
         self.model = ReaSyn(config.model)
         
     @property
     def config(self):
         return OmegaConf.create(self.hparams["config"])
 
-    @property
-    def args(self):
-        return OmegaConf.create(self.hparams.get("args", {}))
-
     def setup(self, stage: str) -> None:
         super().setup(stage)
 
-        # Load chem data
         with open(self.config.chem.rxn_matrix, "rb") as f:
             self.rxn_matrix: ReactantReactionMatrix = pickle.load(f)
 
         with open(self.config.chem.fpindex, "rb") as f:
             self.fpindex: FingerprintIndex = pickle.load(f)
-        
+            
     def configure_optimizers(self):
         optimizer = get_optimizer(self.config.train.optimizer, self.model)
         if "scheduler" in self.config.train:
@@ -61,12 +50,16 @@ class Wrapper(pl.LightningModule):
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": scheduler,
-                "monitor": "val/loss",
+                "monitor": "lr-AdamW"
             }
         return optimizer
-
+    
     def get_loss(self, batch):
-        logits = self.model(batch)[:, :-1].contiguous()
+        logits = self.model(
+            smiles=batch['smiles'],
+            tokens=batch['tokens'],
+            token_padding_mask=batch['token_padding_mask']
+        )[:, :-1].contiguous()
         target = batch["tokens"][:, 1:].contiguous()
         # smiles_mask_rev is False for MOL tokens
         smiles_mask_rev = batch["smiles_mask_rev"][:, 1:].contiguous()
@@ -93,12 +86,12 @@ class Wrapper(pl.LightningModule):
 
     def training_step(self, batch, batch_idx: int):
         loss, loss_dict = self.get_loss(batch)
-        self.log_dict({f"train/loss_{k}": v for k, v in loss_dict.items()}, on_step=True, logger=True)
         self.log("train/loss", loss, on_step=True, prog_bar=True, logger=True)
+        self.log_dict({f"train/loss_{k}": v for k, v in loss_dict.items()}, on_step=True, logger=True)
         return loss
 
-    def validation_step(self, batch, batch_idx: int) -> Any:
+    def validation_step(self, batch, batch_idx: int):
         loss, loss_dict = self.get_loss(batch)
-        self.log_dict({f"val/loss_{k}": v for k, v in loss_dict.items()}, on_step=False, logger=True, sync_dist=True)
         self.log("val/loss", loss, on_step=False, prog_bar=True, logger=True, sync_dist=True)
+        self.log_dict({f"val/loss_{k}": v for k, v in loss_dict.items()}, on_step=False, logger=True, sync_dist=True)
         return loss

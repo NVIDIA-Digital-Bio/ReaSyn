@@ -15,7 +15,10 @@
 
 import sys
 sys.path.append('.')
+import pathlib
 import os
+import argparse
+import time
 import random
 import torch
 import joblib
@@ -23,13 +26,11 @@ import numpy as np
 import tdc
 from tdc.generation import MolGen
 import yaml
-from joblib import delayed
 from rdkit import Chem
 import reasyn.utils.crossover as ga
 from omegaconf import OmegaConf
 from reasyn.chem.mol import Molecule
 from reasyn.sampler.parallel import run_parallel_sampling_return_smiles
-from reasyn.models.regressor import RegressorWrapper
 
 
 def sanitize(mol_list):
@@ -79,7 +80,7 @@ class Oracle:
         self.sa_scorer = tdc.Oracle(name='sa')
         self.diversity_evaluator = tdc.Evaluator(name='diversity')
         self.last_log = 0
-        self.output_dir = "results_pmo"
+        self.output_dir = "results_tdc"
         os.makedirs(self.output_dir, exist_ok=True)
 
     @property
@@ -186,15 +187,16 @@ class Oracle:
         return len(self.mol_buffer) >= self.max_oracle_calls
 
 
-def projection(mol_list, args, regressor=None):
+def projection(mol_list, args):
     _, smiles_list = sanitize(mol_list)
-    input = [Molecule(s) for s in smiles_list]
+    mols = [Molecule(s) for s in smiles_list]
     result_df = run_parallel_sampling_return_smiles(
-        input=input,
+        input=mols,
         model_path=args.model_path,
         search_width=args.search_width,
         exhaustiveness=args.exhaustiveness,
-        reward_model=regressor
+        num_cycles=args.num_cycles,
+        num_editflow_samples=args.num_editflow_samples,
     )
     result_df.drop_duplicates(subset="target", inplace=True, keep="first")
     smiles_list = result_df.smiles.to_list()
@@ -208,11 +210,8 @@ def set_seed(seed):
     
 
 if __name__ == "__main__":
-    import argparse
-    from time import time
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('-o', "--oracle",           type=str,   required=True, 
+    parser.add_argument('-o', "--oracle",           type=str,   required=True,
                         choices=['amlodipine_mpo',
                                  'celecoxib_rediscovery',
                                  'drd2',
@@ -227,28 +226,25 @@ if __name__ == "__main__":
                                  'sitagliptin_mpo',
                                  'zaleplon_mpo'])
     parser.add_argument('-m', "--model_path",       type=str,   required=True)
-    parser.add_argument("--search_width",           type=int,   default=2)
+    # parser.add_argument("--search_width",           type=int,   default=2)
     parser.add_argument("--exhaustiveness",         type=int,   default=4)
+    parser.add_argument("--num_cycles",             type=int,   default=1)
+    parser.add_argument("--num_editflow_samples",   type=int,   default=4)
     parser.add_argument("--population_size",        type=int,   default=100)
     parser.add_argument("--offspring_size",         type=int,   default=100)
     parser.add_argument("--mutation_rate",          type=float, default=0.1)
-    parser.add_argument("--use_regressor",          action='store_true')
     parser.add_argument("--seed",                   type=int,   default=0)
     args = parser.parse_args()
 
+    args.model_path = [pathlib.Path(path) for path in args.model_path.split(',')]
+    assert all([path.exists() for path in args.model_path])
+    
     config = OmegaConf.load('reasyn/utils/hparams_tdc.yml')
-    args.regressor_lr = config[args.oracle]
+    args.search_width = config['search_width'][args.oracle]
     
     set_seed(args.seed)
     fname = f'{args.oracle}_{args.seed}'
     print(f'\033[92m{fname}\033[0m')
-
-    if args.use_regressor:
-        regressor = RegressorWrapper(lr=args.regressor_lr)
-        regressor_mol, regressor_prop = [], []
-        regressor_max_data_size = 1000
-    else:
-        regressor = None
 
     oracle = Oracle(fname)
     oracle.assign_evaluator(tdc.Oracle(name=args.oracle))
@@ -262,7 +258,7 @@ if __name__ == "__main__":
     population_scores = oracle([Chem.MolToSmiles(mol) for mol in population_mol])
 
     patience = 0
-    t_start = time()
+    t_start = time.time()
     while True:
         if len(oracle) > 100:
             oracle.sort_buffer()
@@ -272,9 +268,9 @@ if __name__ == "__main__":
 
         mating_pool = ga.make_mating_pool(population_mol, population_scores, args.population_size)
         offspring_mol = pool(
-            delayed(ga.reproduce)(mating_pool, args.mutation_rate) for _ in range(args.offspring_size)
+            joblib.delayed(ga.reproduce)(mating_pool, args.mutation_rate) for _ in range(args.offspring_size)
         )
-        offspring_mol = projection(offspring_mol, args, regressor)
+        offspring_mol = projection(offspring_mol, args)
         offspring_scores = oracle([Chem.MolToSmiles(mol) for mol in offspring_mol])
 
         population_mol += offspring_mol
@@ -298,16 +294,7 @@ if __name__ == "__main__":
                 patience = 0
             old_score = new_score
 
-        # regressor training
-        if args.use_regressor:
-            regressor_mol += offspring_mol
-            regressor_prop += offspring_scores
-            if len(regressor_mol) > regressor_max_data_size:
-                regressor_mol = regressor_mol[-regressor_max_data_size:]
-                regressor_prop = regressor_prop[-regressor_max_data_size:]
-            regressor.train(regressor_mol, regressor_prop)
-        
         if oracle.finish:
             break
         oracle.save_result()
-    print(f'\033[92m{fname} | {time() - t_start:.2f} sec elapsed\033[0m')
+    print(f'\033[92m{fname} | {time.time() - t_start:.2f} sec elapsed\033[0m')

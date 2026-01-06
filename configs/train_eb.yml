@@ -9,11 +9,13 @@ chem:
   fpindex: data/processed/comp_2048/fpindex.pkl
 
 data:
-  data_type: train
   init_stack_weighted_ratio: 0.90
+  max_num_reactions: 5
 
 model:
-  model_type: autoregressive
+  model_type: editflow
+  scheduler_type: cubic
+  coupling_type: bridge
   encoder:
     num_token_types: 200
     d_model: 768
@@ -26,7 +28,7 @@ model:
     nhead: 16
     dim_feedforward: 4096
     num_layers: 10
-    pe_max_len: 768
+    pe_max_len: 512
     output_norm: false
 
 train:

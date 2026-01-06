@@ -21,7 +21,6 @@ import pytorch_lightning as pl
 import torch
 from omegaconf import OmegaConf
 from pytorch_lightning import callbacks, loggers, strategies
-from reasyn.data.dataset import ProjectionDataModule
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -29,10 +28,11 @@ torch.set_float32_matmul_precision("medium")
 
 
 @click.command()
-@click.option("--config_path", "-c", type=str, default="configs/train.yml")
+@click.option("--config_path", "-c", type=str, default="configs/train_ar.yml")
 @click.option("--exp_name", "-n", type=str, default='debug')
 @click.option("--seed", type=int, default=42)
 @click.option("--batch-size", "-b", type=int, default=64)   # batch size per GPU
+@click.option("--data_path", "-d", type=str, default=None)    # for EditFlow
 @click.option("--num-workers", type=int, default=8)
 @click.option("--num-nodes", type=int, default=int(os.environ.get("NUM_NODES", 1)))
 @click.option("--num-sanity-val-steps", type=int, default=1)
@@ -42,6 +42,7 @@ def main(
     exp_name: str,
     seed: int,
     batch_size: int,
+    data_path: str,
     num_workers: int,
     num_nodes: int,
     num_sanity_val_steps: int,
@@ -52,14 +53,7 @@ def main(
 
     config = OmegaConf.load(config_path)
     os.environ["WANDB_RUN_ID"] = exp_name
-    
-    datamodule = ProjectionDataModule(
-        config,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        **config.data,
-    )
-    
+
     resume = None
     logger = loggers.WandbLogger(project='reasyn', name=exp_name, save_dir=log_dir)
     save_dir = os.path.join(logger.save_dir, logger.name, logger._name, 'checkpoints')
@@ -70,21 +64,13 @@ def main(
             resume = os.path.join(save_dir, last_filename)
     
     if config.model.model_type == 'autoregressive':
-        from reasyn.trainer.autoregressive import Wrapper
+        from reasyn.trainer.wrapper_autoregressive import Wrapper
+    elif config.model.model_type == 'editflow':
+        from reasyn.trainer.wrapper_editflow import Wrapper
     else:
         raise ValueError('Wrong model_type!')
+    model = Wrapper(config=config)
 
-    model = Wrapper(
-        config=config,
-        args={
-            "config_path": config_path,
-            "seed": seed,
-            "batch_size": batch_size,
-            "num_workers": num_workers,
-            "resume": resume,
-        },
-    )
-    
     trainer = pl.Trainer(
         accelerator="gpu",
         devices=-1,
@@ -102,6 +88,22 @@ def main(
         val_check_interval=config.train.val_freq,
         limit_val_batches=4,
     )
+    
+    if config.model.model_type == 'editflow' and \
+        (config.model.coupling_type in ('bridge', 'uniform')):
+        # EditFlow w/ UniformCoupling or BridgeCoupling
+        assert data_path is not None
+        from reasyn.data.dataset import EditFlowDataModule as DataModule
+    else:
+        from reasyn.data.dataset import ProjectionDataModule as DataModule
+    datamodule = DataModule(
+        config,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        data_path=data_path,
+        **config.data,
+    )
+    
     trainer.fit(model, datamodule=datamodule, ckpt_path=resume)
 
 

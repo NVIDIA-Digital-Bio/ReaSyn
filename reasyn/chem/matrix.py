@@ -99,7 +99,7 @@ class ReactantReactionMatrix:
 def create_reactant_reaction_matrix_cache(
     reactant_path: pathlib.Path,
     reaction_path: pathlib.Path,
-    cache_path: pathlib.Path,
+    cache_path: pathlib.Path | None,
     excl_path: pathlib.Path | None = None,
 ):
     rxns = ReactionContainer(read_reaction_file(reaction_path))
@@ -108,6 +108,7 @@ def create_reactant_reaction_matrix_cache(
         excl_smiles = {m.smiles for m in read_mol_file(excl_path)}
         mols = [m for m in mols if m.smiles not in excl_smiles]
     m = ReactantReactionMatrix(mols, rxns)
-    with open(cache_path, "wb") as f:
-        pickle.dump(m, f)
+    if cache_path is not None:
+        with open(cache_path, "wb") as f:
+            pickle.dump(m, f)
     return m

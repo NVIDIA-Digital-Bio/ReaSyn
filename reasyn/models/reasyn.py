@@ -16,7 +16,8 @@
 import dataclasses
 import numpy as np
 import torch
-from torch import nn
+import torch.nn as nn
+import torch.nn.functional as F
 
 from reasyn.chem.fpindex import FingerprintIndex
 from reasyn.chem.matrix import ReactantReactionMatrix
@@ -27,32 +28,7 @@ from reasyn.chem.featurize import decode_smiles, TokenType
 from .encoder import Encoder
 from .decoder import Decoder
 from .classifier_head import ClassifierHead
-
-
-@dataclasses.dataclass
-class _ReactantItem:
-    reactant: Molecule
-    index: int
-    score: float
-
-    def __iter__(self):
-        return iter([self.reactant, self.index, self.score])
-
-
-@dataclasses.dataclass
-class _ReactionItem:
-    reaction: Reaction
-    index: int
-    score: float
-
-    def __iter__(self):
-        return iter([self.reaction, self.index, self.score])
-
-
-@dataclasses.dataclass
-class PredictResult:
-    sampled_type: str   # 'ABORTED', 'END', 'BB', 'RXN'
-    sampled_item: None | _ReactantItem | _ReactionItem
+from reasyn.chem.featurize import TokenType
 
 
 class ReaSyn(nn.Module):
@@ -61,157 +37,70 @@ class ReaSyn(nn.Module):
         self.encoder = Encoder(**cfg.encoder)
         self.d_model: int = self.encoder.dim
         self.max_len = cfg.decoder.pe_max_len
-        self.vocab_size = max(TokenType) + 1
-        # self.decoder = Decoder(**cfg.decoder, vocab_size=self.vocab_size)
-        self.decoder = Decoder(**cfg.decoder, vocab_size=self.vocab_size + 2)   # to match with trained ckpt
-        self.token_head = ClassifierHead(self.d_model, self.vocab_size)
+        self.model_type = cfg.model_type
+        self.vocab_size = int(max(TokenType))
         
-    def forward(self, batch):
-        code, code_padding_mask = self.encoder(batch)
+        self.decoder = Decoder(**cfg.decoder,
+                               vocab_size=self.vocab_size,
+                               use_causal_mask=self.model_type == 'autoregressive',
+                               use_time_embed=self.model_type == 'editflow')
+        if self.model_type == 'editflow':
+            from reasyn.utils.editflow_utils import get_coupling, KappaScheduler
+            self.rates_out = ClassifierHead(self.d_model, 3)    # insert, substitute, delete
+            self.ins_out = ClassifierHead(self.d_model, self.vocab_size)    # insert logits
+            self.sub_out = ClassifierHead(self.d_model, self.vocab_size)    # substitute logits
+            self.coupling = get_coupling(cfg.coupling_type, vocab_size=self.vocab_size)
+            self.scheduler = KappaScheduler(cfg.scheduler_type)
+        elif self.model_type == 'autoregressive':
+            self.token_head = ClassifierHead(self.d_model, self.vocab_size)
+    
+    def forward(
+        self,
+        smiles: torch.Tensor,
+        tokens: torch.Tensor,
+        token_padding_mask: torch.Tensor | None,
+        t: torch.Tensor | None = None   # for EditFlow
+    ) -> torch.Tensor:
+        code, code_padding_mask = self.encoder(smiles=smiles)
         h = self.decoder(
             code=code,
             code_padding_mask=code_padding_mask,
-            tokens=batch["tokens"],
-            token_padding_mask=batch["token_padding_mask"]
+            tokens=tokens,
+            token_padding_mask=token_padding_mask,
+            t=t
         )
+        if self.model_type == 'editflow':
+            ut = self.rates_out(h)
+            ins_logits = self.ins_out(h)
+            sub_logits = self.sub_out(h)
+            ut = F.softplus(ut) # ensure positive rates
+            ins_probs = F.softmax(ins_logits, dim=-1)
+            sub_probs = F.softmax(sub_logits, dim=-1)
+            return ut, ins_probs, sub_probs
         logits = self.token_head(h)
         return logits
-
-    ### for finetuning
-    @torch.no_grad()
-    def sample_for_finetune(self, batch, group_size=None, softmax_temp=0.1):
-        code, code_padding_mask = self.encoder(batch)
-        
-        if group_size is not None:
-            code = code.repeat_interleave(group_size, dim=0)
-            code_padding_mask = code_padding_mask.repeat_interleave(group_size, dim=0)
-        bs = code.shape[0]
-        tokens = torch.full((bs, 1), TokenType.START).to(batch['smiles'].device)
-        
-        finished = torch.zeros(bs).byte()
-        for _ in range(self.max_len - 1):
-            h = self.decoder(
-                code=code,
-                code_padding_mask=code_padding_mask,
-                tokens=tokens,
-                token_padding_mask=None,
-            )
-            h_next = h[:, -1]
-            logits = self.token_head(h_next)
-            prob = torch.nn.functional.softmax(logits / softmax_temp, dim=1)
-            next_token = torch.multinomial(prob, num_samples=1)
-            tokens = torch.hstack([tokens, next_token])
-            
-            is_eos = (next_token.squeeze(-1) == TokenType.END).cpu()
-            finished = torch.ge(finished + is_eos, 1)
-            if finished.prod() == 1: break
-        return tokens
-
-    def get_ll(self, batch):
-        code, code_padding_mask = self.encoder(batch)
-
-        group_size = batch['tokens'].shape[0] // code.shape[0]
-        if group_size is not None:
-            code = code.repeat_interleave(group_size, dim=0)
-            code_padding_mask = code_padding_mask.repeat_interleave(group_size, dim=0)
-        
-        h = self.decoder(
-            code=code,
-            code_padding_mask=code_padding_mask,
-            tokens=batch['tokens'],
-            token_padding_mask=None,
-        )[:, :-1]
-        logits = self.token_head(h)
-        log_prob = torch.nn.functional.log_softmax(logits, dim=-1)
-        
-        target = batch['tokens'][:, 1:]
-        ll = torch.gather(log_prob, dim=-1, index=target[..., None]).squeeze(-1)
-        return ll
-
-    ### for sampling; cannot batchrize
-    @torch.no_grad()
-    def predict(
+    
+    def sample(
         self,
         code: torch.Tensor | None,
         code_padding_mask: torch.Tensor | None,
         tokens: torch.Tensor,
-        fpindex: FingerprintIndex,
-        rxn_matrix: ReactantReactionMatrix,
-        topk: int = 4,
-        temperature_token: float = 0.1,
-    ):
-        def sample_token(tokens):
-            h = self.decoder(
-                code=code,
-                code_padding_mask=code_padding_mask,
-                tokens=tokens,
-                token_padding_mask=None,
-            )
-            h_next = h[:, -1]  # (1, h_dim)
-            
-            token_logits = self.token_head(h_next)
-            token_sampled = torch.multinomial(
-                torch.nn.functional.softmax(token_logits / temperature_token, dim=-1),
-                num_samples=1,
-            )
-            return token_sampled, token_logits
-
-        def get_reactants(smiles) -> list[list[_ReactantItem]]:
-            mol = Molecule(smiles)
-            if mol._rdmol is None:
-                return
-            
-            fp = torch.Tensor(mol.get_fingerprint(option=fpindex._fp_option))
-            query_res = fpindex.query_cuda(q=fp[None, :], k=topk)[0]
-            mols = np.array([q.molecule for q in query_res])
-            mol_idxs = np.array([q.index for q in query_res])
-            distances = np.array([q.distance for q in query_res])
-            scores = 1.0 / (distances + 0.1)
-            
-            sorted_indices = (-scores).argsort()
-            mols = mols[sorted_indices]
-            mol_idxs = mol_idxs[sorted_indices]
-            scores = scores[sorted_indices]
-            return [_ReactantItem(reactant=mol, index=mol_idx, score=score)
-                    for mol, mol_idx, score in zip(mols, mol_idxs, scores)]
-        
-        def get_reactions(reaction_logits) -> list[list[_ReactionItem]]:
-            reaction_probs = reaction_logits.softmax(dim=-1)
-            sorted_indices = (-reaction_probs).argsort()
-            reaction_probs = reaction_probs[sorted_indices]
-
-            return [_ReactionItem(reaction=rxn_matrix.reactions[idx], index=idx, score=score)
-                    for idx, score in zip(sorted_indices, reaction_probs)]
-        
-        assert len(tokens.shape) == 1, 'no batch allowed'
-        
-        if len(tokens) > self.max_len:
-            sampled_type = 'ABORTED'
-            sampled_item = None
-        else:
-            tokens = tokens[None, :]
-            token_sampled, token_logits = sample_token(tokens)
-        
-        if token_sampled == TokenType.MOL_START:
-            sampled_type = 'BB'
-            token_sampled_bb = []
-            while token_sampled != TokenType.MOL_END and tokens.shape[-1] < self.max_len - 2:
-                tokens = torch.hstack([tokens, token_sampled])
-                token_sampled, _ = sample_token(tokens)
-                token_sampled_bb.append(token_sampled)
-            token_sampled_bb = torch.tensor(token_sampled_bb)[:-1]  # exclude MOL_END
-            smiles = decode_smiles(token_sampled_bb)
-            sampled_item = get_reactants(smiles)
-            if sampled_item is None:
-                sampled_type = 'ABORTED'
-        
-        elif token_sampled >= TokenType.RXN_MIN:
-            sampled_type = 'RXN'
-            reaction_logits = token_logits[0, TokenType.RXN_MIN : TokenType.RXN_MAX + 1]    # (115,)
-            sampled_item = get_reactions(reaction_logits)
-
-        else:
-            sampled_type = 'END'
-            sampled_item = None
-
-        return PredictResult(sampled_type, sampled_item)
+        token_padding_mask: torch.Tensor | None,
+        t: torch.Tensor | None = None,  # for EditFlow
+    ) -> torch.Tensor:
+        h = self.decoder(
+            code=code,
+            code_padding_mask=code_padding_mask,
+            tokens=tokens,
+            token_padding_mask=token_padding_mask,
+            t=t
+        )
+        if self.model_type == 'editflow':
+            ut = self.rates_out(h)
+            ins_logits = self.ins_out(h)
+            sub_logits = self.sub_out(h)
+            return ut, ins_logits, sub_logits
+        if self.model_type == 'autoregressive':
+            h = h[:, -1]    # (1, h_dim)
+        logits = self.token_head(h)
+        return logits

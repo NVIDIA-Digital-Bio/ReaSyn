@@ -1,10 +1,13 @@
 ## Model Overview
 
+### Model NSpect ID
+NSPECT-NZMC-4JKB
+
 ### Description
 
-ReaSyn is a model for predicting the synthesis pathway, reaction steps from reactants to final product(s), for a target product molecule. When the target molecule cannot be synthesized directly using known reaction steps, ReaSyn will generate the pathways for the most structurally similar, synthesizable analog of the target molecule.The model uses an encoder-decoder transformer architecture and a chain-of-reaction notation, where a full synthetic pathway is represented as a text sequence. This approach allows the model to achieve SOTA performance in tasks like synthesis planning and incorporating synthesizability into goal-directed molecular property optimization.
+ReaSyn is a model for predicting the synthesis pathway, reaction steps from reactants to final product(s), for a target product molecule. When the target molecule cannot be synthesized directly using known reaction steps, ReaSyn will generate the pathways for the most structurally similar, synthesizable analog of the target molecule.The model uses an encoder-decoder Transformer architecture, where a full synthetic pathway is represented as a text sequence. ReaSyn v2 improves the reconstruction and projection capabilities of ReaSyn v1 using a more advanced search (by combining top-down and bottom-up tree traversal) in addition to an Edit Flow model that edits generated pathways via deletion, substitution, and insertion operations. This approach allows the model to achieve SOTA performance in tasks like synthesis planning and incorporating synthesizability into goal-directed molecular property optimization.
 
-This model is ready for commercial use. 
+This model is ready for commercial use.
 
 ### License/Terms of Use
 
@@ -13,39 +16,59 @@ GOVERNING TERMS: Use of this model is governed by the [NVIDIA Open Model License
 Deployment Geography: Global
 
 Use Case: <br>
-ReaSyn is a model for predicting the synthetic pathway, reaction steps from reactants to final product(s), for a target product molecule. The model can be used in the pharmaceutical and chemical industries and in academic research to identify how to synthesize a molecule, help chemists in planning a first time synthesis of a molecule, the optimization of an existing synthesis pathway, or the filtering of candidate molecules based on ease of synthesis. <br>
+ReaSyn v2 is a model for predicting the synthetic pathway, reaction steps from reactants to final product(s), for a target product molecule. The model can be used in the pharmaceutical and chemical industries and in academic research to identify how to synthesize a molecule, help chemists in planning a first time synthesis of a molecule, the optimization of an existing synthesis pathway, or the filtering of candidate molecules based on ease of synthesis.  <br>
 
-Release Date: <br>
-Github 09/23/2025 via https://github.com/NVIDIA-Digital-Bio/ReaSyn <br>
-NGC 09/23/2025 via https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=1.0 <br> 
+Release Date:  <br>
+Github 1/8/2025 via https://github.com/NVIDIA-Digital-Bio/ReaSyn <br>
+NGC 1/8/2025 via https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=1.0 <br> 
 
 ### References
-Research paper: “Rethinking Molecule Synthesizability with Chain-of-Reaction”, https://arxiv.org/abs/2509.16084v1
+Research paper: "Exploring Synthesizable Chemical Space with Iterative Pathway Refinements," https://arxiv.org/abs/2509.16084
 
 ### Model Architecture
 
 Architecture Type: Encoder-decoder
 Network Architecture: Encoder-decoder Transformer
-ReaSyn utilizes an Encoder-decoder Transformer architecture which takes a molecular SMILES as input and outputs its synthetic pathway. Encoder contains 6 layers and decoder contains 10 layers. Both encoder and decoder have a hidden size of 768, 16 attention heads, and a feed-forward dimension of 4096.
+ReaSyn v2 utilizes an encoder-decoder Transformer architecture which takes a molecular SMILES as input and outputs its synthetic pathway autoregressively. Encoder contains 6 layers and decoder contains 10 layers. Both encoder and decoder have a hidden size of 768, 16 attention heads, and a feed-forward dimension of 4096.
+ReaSyn v2 has another Edit Flow model, which has the same encoder-decoder Transformer architecture as backbone but with three additional heads. The Edit Flow model takes a molecular SMILES and synthetic pathway generated from the autoregressive model as input and outputs the probabilities of edit operations: insertion, deletion, and substitution, that yield a more refined synthetic pathway.
 
-The total number of parameters in ReaSyn is 166M.
+The autoregressive model has 166M parameters and the Edit Bridge model has 174M parameters.
 
-### Input
+### Autoregressive model
+
+#### Input
 
 Input Types: Text<br>
 Input Formats: SMILES string<br>
 Input Parameters: One-Dimensional (1D)<br>
 Other Properties Related to Input: Maximum input length is 256 tokens.
 
-### Output
+#### Output
 
 Output Types: Text<br>
-Output Formats: Chain-of-Reaction sequence (molecular synthetic pathway)<br>
+Output Formats: Molecular synthetic pathway<br>
 Output Parameters: One-Dimensional (1D)<br>
-Other Properties Related to Output: Maximum output length is 768 tokens.
+Other Properties Related to Output: Maximum output length is 512 tokens.
 
 Our AI models are designed and/or optimized to run on NVIDIA GPU-accelerated systems. By leveraging NVIDIA’s hardware (e.g. GPU cores) and software frameworks (e.g., CUDA libraries), the model achieves faster training and inference times compared to CPU-only solutions.
 
+### Edit Flow model
+
+#### Input
+
+Input Types: Text<br>
+Input Formats: SMILES string, molecular synthetic pathway<br>
+Input Parameters: One-Dimensional (1D)<br>
+Other Properties Related to Input: Maximum input length of SMILES string is 256 tokens. Maximum input length of molecular synthetic pathway is 512 tokens.
+
+#### Output
+
+Output Types: Text<br>
+Output Formats: Molecular synthetic pathway<br>
+Output Parameters: One-Dimensional (1D)<br>
+Other Properties Related to Output: Maximum output length is 512 tokens.
+
+Our AI models are designed and/or optimized to run on NVIDIA GPU-accelerated systems. By leveraging NVIDIA’s hardware (e.g. GPU cores) and software frameworks (e.g., CUDA libraries), the model achieves faster training and inference times compared to CPU-only solutions.
 
 ### Software Integration
 
@@ -57,8 +80,7 @@ The integration of foundation and fine-tuned models into AI systems requires add
 
 ### Model Versions
 
-ReaSyn v1
-
+ReaSyn v2
 
 ## Training and Evaluation Datasets
 

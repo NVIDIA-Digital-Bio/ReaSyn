@@ -184,7 +184,8 @@ class TokenType(enum.IntEnum):
     # MOL: 4~156 / RXN: 157~271
     RXN_MIN = MOL_END + len(_smiles_vocab) + 1  # 157
     RXN_MAX = RXN_MIN + NUM_REACTIONS - 1       # 271
-    
+    EPS = RXN_MAX + 1                           # 272; for EditFlow
+
 
 _smiles_token_to_id = {token: i for i, token in enumerate(_smiles_vocab, start=1)}
 _smiles_token_max = max(_smiles_token_to_id.values())
@@ -192,7 +193,6 @@ _smiles_token_pattern = re.compile("(" + "|".join(map(re.escape, sorted(_smiles_
 
 _smiles_id_to_token = {i: token for i, token in enumerate(_smiles_vocab, start=TokenType.MOL_END + 1)}
 
-# for finetuning
 _token_id_to_token = copy(_smiles_id_to_token)
 _token_id_to_token[TokenType.END] = 'END'
 # separate BBs and RXNs with ','
@@ -214,7 +214,6 @@ def decode_smiles(smiles_ids):
     return ''.join([s for s in smiles if s is not None])
 
 
-# for finetuning
 def decode_tokens(token_ids):
     tokens = [_token_id_to_token.get(int(token_id)) for token_id in token_ids]
     sequence = ''.join([t for t in tokens if t is not None])

@@ -1,19 +1,39 @@
-<h1 align="center">Rethinking Molecule Synthesizability with Chain-of-Reaction</h1>
+<h1 align="center">Exploring Sythesizable Chemical Space with Iterative Pathway Refinements</h1>
 
-This is the official code repository for the paper titled [Rethinking Molecule Synthesizability with Chain-of-Reaction](https://arxiv.org/abs/2509.16084v1).
+This is the official code repository for the paper titled [Exploring Sythesizable Chemical Space with Iterative Pathway Refinements](https://arxiv.org/abs/2509.16084).
 
 <p align="center">
     <img width="750" src="assets/concept.png"/>
 </p>
 
+<p align="center">
+    <img width="750" src="assets/concept2.png"/>
+</p>
+
 *Abstract:*
-A well-known pitfall of molecular generative models is that they are not guaranteed to generate synthesizable molecules. There have been considerable attempts to address this problem, but given the exponentially large combinatorial space of synthesizable molecules, existing methods have shown limited coverage of the space and poor molecular optimization performance. To tackle these problems, we introduce ReaSyn, a generative framework for synthesizable projection where the model explores the neighborhood of given molecules in the synthesizable space by generating pathways that result in synthesizable analogs. To fully utilize the chemical knowledge contained in the synthetic pathways, we propose a novel perspective that views synthetic pathways akin to reasoning paths in large language models (LLMs). Specifically, inspired by chain-of-thought (CoT) reasoning in LLMs, we introduce the chain-of-reaction (CoR) notation that explicitly states reactants, reaction types, and intermediate products for each step in a pathway. With the CoR notation, ReaSyn can get dense supervision in every reaction step to explicitly learn chemical reaction rules during supervised training and perform step-by-step reasoning. In addition, to further enhance the reasoning capability of ReaSyn, we propose reinforcement learning (RL)-based finetuning and goal-directed test-time compute scaling tailored for synthesizable projection. ReaSyn achieves the highest reconstruction rate and pathway diversity in synthesizable molecule reconstruction and the highest optimization performance in synthesizable goal-directed molecular optimization, and significantly outperforms previous synthesizable projection methods in synthesizable hit expansion. These results highlight ReaSyn's superior ability to navigate combinatorially-large synthesizable chemical space.
+A well-known pitfall of molecular generative models is that they are not guaranteed
+to generate synthesizable molecules. Existing solutions for this problem often struggle
+to effectively navigate exponentially large combinatorial space of synthesizable
+molecules and suffer from poor coverage. To address this problem, we introduce
+ReaSyn, an iterative generative pathway refinement framework that obtains synthesizable
+analogs to input molecules by projecting them onto synthesizable space.
+Specifically, we propose a simple synthetic pathway representation that allows for
+generating pathways in both bottom-up and top-down traversal of synthetic trees.
+We design ReaSyn so that both bottom-up and top-down pathways can be sampled
+with a single unified autoregressive model. ReaSyn can thus iteratively refine subtrees
+of generated synthetic trees in a bidirectional manner. Further, we introduce a
+discrete flow model that refines the generated pathway at the entire pathway level
+with edit operations: insertion, deletion, and substitution. The iterative refinement
+cycle of (1) bottom-up decoding, (2) top-down decoding, and (3) holistic editing
+constitutes a powerful pathway reasoning strategy, allowing the model to explore
+the vast space of synthesizable molecules. Experimentally, ReaSyn achieves the
+highest reconstruction rate and pathway diversity in synthesizable molecule reconstruction
+and the highest optimization performance in synthesizable goal-directed
+molecular optimization, and significantly outperforms previous synthesizable projection
+methods in synthesizable hit expansion. These results highlight ReaSyn’s
+superior ability to navigate combinatorially-large synthesizable chemical space.
 
 Find the Model Card++ for ReaSyn [here](model_card/model_card.md).
-
-## 🚀 News
-
-We introduce [ReaSyn V2](https://arxiv.org/abs/2509.16084), which achieves significantly improved synthesizable projection capabilities by combining (1) bottom-up decoding, (2) top-down decoding, and (3) holistic editing of synthetic pathways. Please refer to the `reasyn_v2` branch for ReaSyn V2.
 
 ## Installation
 
@@ -65,23 +85,39 @@ python scripts/preprocess.py --model-config configs/preprocess_zinc250k.yml
 
 ## Training
 
-We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn) and [HuggingFace](https://huggingface.co/nvidia/NV-ReaSyn). Place `NV-ReaSyn-AR-166M-v1.ckpt` in the `data/trained_model` directory.
+We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn) and HuggingFace ([AR](https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v2) and [EB](https://huggingface.co/nvidia/NV-ReaSyn-EB-174M-v2)). Place `NV-ReaSyn-AR-166M-v2.ckpt` and `NV-ReaSyn-EB-174M-v2.ckpt` in the `data/trained_model` directory.
 
-### Supervised Learning
-Run the following command to perform supervised training of ReaSyn:
+### Autoregressive Model
+Run the following command to train ReaSyn's autoregressive model for bottom-up and top-down pathway generation:
 ```bash
 torchrun --nnodes $NUM_NODES --nproc_per_node $SUBMIT_GPUS \
          --master_addr $MASTER_ADDR --master_port $MASTER_PORT --node_rank $NODE_RANK \
-         scripts/train.py -n ${exp_name}
+         scripts/train.py -n ${exp_name} -c configs/train_ar.yml
 ```
-We used 2 nodes and 8 NVIDIA A100 GPUs/node. Training for 500k steps took 5~6 days.
+We used 8 NVIDIA A100 GPUs. Training for 500k steps took 5~6 days.
 
-### RL Finetuning
-Run the following command to perform RL finetuning of ReaSyn:
+### Edit Bridge Model
+
+To train ReaSyn's Edit Bridge model, we generated the dataset of `(target molecule, AR-predicted pathway, true pathway)` triplets offline.<br>
+Specifically, given a `(target molecule, true pathway)` pair, we first generated `AR-predicted pathway` with the trained AR model.<br>
+Then, the aligned `(AR-predicted pathway, true pathway)` pair is obtained via the alignment process (Section B of the paper).<br>
+
+Run the following command to prepare the training data for ReaSyn's Edit Bridge model:
 ```bash
-torchrun --nproc_per_node ${num_gpus} scripts/finetune.py -n ${exp_name} -m ${model_path}
+python scripts/editflow_data_generate_x0.py -c configs/train_eb.yml -m ${pretrained_path} -d ${data_path}
+python scripts/editflow_data_align.py -c configs/train_eb.yml -d ${data_path}
 ```
-We used 4 NVIDIA A100 GPUs. Finetuning for 1k steps took 5 hours.
+`pretrained_path` is the trained AR model path, e.g., `data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt`.<br>
+Running the first command creates a temporary folder `data_path_x0`. You may delete this folder after running the second command.<br>
+Generating 10.5M data points with 120 NVIDIA A100 GPUs took ~3 days.
+
+Run the following command to train ReaSyn's Edit Bridge model for holistic pathway editing:
+```bash
+torchrun --nnodes $NUM_NODES --nproc_per_node $SUBMIT_GPUS \
+         --master_addr $MASTER_ADDR --master_port $MASTER_PORT --node_rank $NODE_RANK \
+         scripts/train.py -n ${exp_name} -c configs/train_eb.yml -b 128 -d ${data_path}
+```
+We used 8 NVIDIA A100 GPUs. Training for 500k steps took ~5 days.
 
 ## Inference
 
@@ -92,32 +128,35 @@ For the ZINC250k test set, we provide `data/test_zinc250k.txt`.
 
 Run the following command to conduct synthesizable molecule reconstruction:
 ```bash
-python scripts/sample.py -m ${model_path} -i ${testset_path} -o ${output_path}
-# python scripts/sample.py -m ${model_path} -i data/enamine_smiles_1k.txt -o results/enamine.txt
-# python scripts/sample.py -m ${model_path} -i data/chembl_filtered_1k.txt -o results/chembl.txt
-# python scripts/sample.py -m ${model_path} -i data/test_zinc250k.txt -o results/zinc250k.txt --add_bb_path data/processed/zinc250k_2048/fpindex.pkl
+python scripts/sample.py -m ${model_path} -i ${testset_path} -o ${output_path} --num_cycles ${num_cycles}
+# python scripts/sample.py -m ${model_path} -i data/enamine_smiles_1k.txt -o results/enamine.txt --num_cycles 12
+# python scripts/sample.py -m ${model_path} -i data/chembl_filtered_1k.txt -o results/chembl.txt --num_cycles 24
+# python scripts/sample.py -m ${model_path} -i data/test_zinc250k.txt -o results/zinc250k.txt --num_cycles 16 --add_bb_path data/processed/zinc250k_2048/fpindex.pkl
 python scripts/eval_recon.py ${output_path}
 ```
+`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt,data/trained_model/NV-ReaSyn-EB-174M-v2.ckpt`.<br>
 We recommend using multiple GPUs for parallelized synthesizable molecule reconstruction.
 
 ### Synthesizable Goal-directed Optimization of TDC Oracles
 Run the following command to conduct synthesizable goal-directed optimization of TDC oracles:
 ```bash
-python scripts/optimize_tdc.py -m ${model_path} -o ${oracle} --use_regressor
+python scripts/optimize_tdc.py -m ${model_path} -o ${oracle}
 ```
+`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt,data/trained_model/NV-ReaSyn-EB-174M-v2.ckpt`.
 
 ### Synthesizable Hit Expansion
 Run the following command to conduct synthesizable hit expansion:
 ```bash
-python scripts/sample.py -m ${model_path} -i data/jnk3_hit.txt -o ${output_path} --reward_model jnk3 --exhaustiveness 128
+python scripts/sample.py -m ${model_path} -i data/jnk3_hit.txt -o ${output_path} --search_width 12 --exhaustiveness 128 --num_cycles 12 --no_exact_break
 python scripts/eval_hit.py ${output_path}
 ```
+`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt,data/trained_model/NV-ReaSyn-EB-174M-v2.ckpt`.
 
 ### (Optional) Filtering Pathways
 We additionally provide the functionality to filter out generated pathways that lead to molecules that users want to avoid (e.g., toxic molecules). We provide an example catalog of toxic molecules in `data/mols_to_filter.txt`. Set `mols_to_filter` and `filter_sim` arguments to filter synthetic pathways for molecules whose Tanimoto similarity to `mols_to_filter` is greater than `filter_sim`.<br>
 For example:
 ```bash
-python scripts/sample.py -m ${model_path} -i ${testset_path} -o ${output_path} --mols_to_filter data/mols_to_filter.txt  --filter_sim ${filter_sim}
+python scripts/sample.py -m ${model_path} -i ${testset_path} -o ${output_path} --num_cycles ${num_cycles} --mols_to_filter data/mols_to_filter.txt --filter_sim ${filter_sim}
 ```
 
 ## License
@@ -129,7 +168,7 @@ The model weights are made available under the [NVIDIA Open Model License](https
 If you find this repository and our paper useful, we kindly request to cite our work.
 ```BibTex
 @article{lee2025reasyn,
-  title     = {Rethinking Molecule Synthesizability with Chain-of-Reaction},
+  title     = {Exploring Sythesizable Chemical Space with Iterative Pathway Refinements},
   author    = {Lee, Seul and Kreis, Karsten and Veccham, Srimukh Prasad and Liu, Meng and Reidenbach, Danny and Paliwal, Saee and Nie, Weili and Vahdat, Arash},
   journal   = {arXiv},
   year      = {2025}

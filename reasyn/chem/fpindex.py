@@ -19,6 +19,7 @@ import os
 import pathlib
 import pickle
 import tempfile
+import editdistance
 from collections.abc import Iterable, Sequence
 
 import joblib
@@ -78,6 +79,7 @@ class FingerprintIndex:
     def __init__(self, molecules: Iterable[Molecule], fp_option: FingerprintOption) -> None:
         super().__init__()
         self._molecules = tuple(molecules)
+        self._smiles = [m.csmiles for m in molecules]
         self._fp_option = fp_option
         self._fp = self._init_fingerprint()
         self._tree = self._init_tree()
@@ -134,10 +136,14 @@ class FingerprintIndex:
         return torch.tensor(self._fp, dtype=torch.float, device=device)
 
     @torch.no_grad()
-    def query_cuda(self, q: torch.Tensor, k: int) -> list[list[_QueryResult]]:
-        bsz = q.size(0)
-        q = q.reshape([-1, self._fp_option.dim])
-        pwdist = torch.cdist(self.fp_cuda(q.device), q, p=1)  # (n_mols, n_queries)
+    def query_cuda(self, q: torch.Tensor | str, k: int) -> list[list[_QueryResult]]:
+        if isinstance(q, str):  # if mol is invalid, use edit distance instead
+            bsz = 1
+            pwdist = torch.Tensor([editdistance.eval(q, s) for s in self._smiles])
+        else:
+            bsz = q.size(0)
+            q = q.reshape([-1, self._fp_option.dim])
+            pwdist = torch.cdist(self.fp_cuda(q.device), q, p=1)  # (n_mols, n_queries)
         dist_t, idx_t = torch.topk(pwdist, k=k, dim=0, largest=False)  # (k, n_queries)
         dist = dist_t.t().reshape([bsz, -1]).cpu().numpy()
         idx = idx_t.t().reshape([bsz, -1]).cpu().numpy()

@@ -18,6 +18,7 @@ sys.path.append('.')
 import argparse
 import pandas as pd
 from tdc import Oracle
+from reasyn.chem.mol import Molecule
 from rdkit import RDLogger
 RDLogger.DisableLog('rdApp.*')
 
@@ -36,20 +37,18 @@ if __name__ == '__main__':
 
     df = pd.read_csv(file)
     total = len(df)
+    df = df.drop_duplicates(['target', 'smiles'])
     print(total)
 
-    if 'jnk3' not in df:
-        df['jnk3'] = oracle(df['smiles'].tolist())
-        df['thr'] = df['target'].apply(lambda s: thr[s])
-        df.to_csv(file, index=False)
-
+    df['sim'] = [Molecule(t).sim(Molecule(s)) for t, s in zip(df['target'], df['smiles'])]
+    df['jnk3'] = oracle(df['smiles'].tolist())
+    df['thr'] = df['target'].apply(lambda s: thr[s])
+    
+    df2 = df[df['sim'] >= 0.6]
+    print(f'Analog rate:\t{len(df2) / total * 100:.2f} %')
+    
     df2 = df[df['jnk3'] > df['thr']]
     print(f'Improve rate:\t{len(df2) / total * 100:.2f} %')
-    print(f'Similarity:\t{df2["score"].mean():.3f}')
-
-    df2 = df[df['score'] >= 0.6]
-    print(f'Analog rate:\t{len(df2) / total * 100:.2f} %')
-    print(f'JNK3:\t\t{df2["jnk3"].mean():.3f}')
-
-    df2 = df2[df2['jnk3'] > df2['thr']]
+    
+    df2 = df2[df2['sim'] >= 0.6]
     print(f'Success rate:\t{len(df2) / total * 100:.2f} %')

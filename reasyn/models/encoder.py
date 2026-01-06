@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import torch
 from torch import nn
 from reasyn.models.positional_encoding import PositionalEncoding
 
@@ -51,8 +52,7 @@ class Encoder(nn.Module):
     def dim(self) -> int:
         return self._dim
 
-    def forward(self, batch):
-        smiles = batch["smiles"]
+    def forward(self, smiles: torch.Tensor):
         h = self.pe_enc(self.smiles_emb(smiles))
         padding_mask = smiles == 0  # the positions with the value of True will be ignored
         out = self.enc(h, src_key_padding_mask=padding_mask)
