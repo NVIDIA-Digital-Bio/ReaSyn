@@ -1,6 +1,6 @@
 <h1 align="center">Rethinking Molecule Synthesizability with Chain-of-Reaction</h1>
 
-This is the official code repository for the paper titled [Rethinking Molecule Synthesizability with Chain-of-Reaction](https://arxiv.org/abs/2509.16084).
+This is the official code repository for the paper titled [Rethinking Molecule Synthesizability with Chain-of-Reaction](https://arxiv.org/abs/2509.16084v1).
 
 <p align="center">
     <img width="750" src="assets/concept.png"/>
@@ -10,6 +10,10 @@ This is the official code repository for the paper titled [Rethinking Molecule S
 A well-known pitfall of molecular generative models is that they are not guaranteed to generate synthesizable molecules. There have been considerable attempts to address this problem, but given the exponentially large combinatorial space of synthesizable molecules, existing methods have shown limited coverage of the space and poor molecular optimization performance. To tackle these problems, we introduce ReaSyn, a generative framework for synthesizable projection where the model explores the neighborhood of given molecules in the synthesizable space by generating pathways that result in synthesizable analogs. To fully utilize the chemical knowledge contained in the synthetic pathways, we propose a novel perspective that views synthetic pathways akin to reasoning paths in large language models (LLMs). Specifically, inspired by chain-of-thought (CoT) reasoning in LLMs, we introduce the chain-of-reaction (CoR) notation that explicitly states reactants, reaction types, and intermediate products for each step in a pathway. With the CoR notation, ReaSyn can get dense supervision in every reaction step to explicitly learn chemical reaction rules during supervised training and perform step-by-step reasoning. In addition, to further enhance the reasoning capability of ReaSyn, we propose reinforcement learning (RL)-based finetuning and goal-directed test-time compute scaling tailored for synthesizable projection. ReaSyn achieves the highest reconstruction rate and pathway diversity in synthesizable molecule reconstruction and the highest optimization performance in synthesizable goal-directed molecular optimization, and significantly outperforms previous synthesizable projection methods in synthesizable hit expansion. These results highlight ReaSyn's superior ability to navigate combinatorially-large synthesizable chemical space.
 
 Find the Model Card++ for ReaSyn [here](model_card/model_card.md).
+
+## 🚀 News
+
+We introduce [ReaSyn V2](https://arxiv.org/abs/2509.16084), which achieves significantly improved synthesizable projection capabilities by combining (1) bottom-up decoding, (2) top-down decoding, and (3) holistic editing of synthetic pathways. Please refer to the `reasyn_v2` branch for ReaSyn V2.
 
 ## Installation
 
@@ -61,7 +65,7 @@ python scripts/preprocess.py --model-config configs/preprocess_zinc250k.yml
 
 ## Training
 
-We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn) and [HuggingFace](https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v1). Place `model.ckpt` in the `data/trained_model` directory.
+We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn) and [HuggingFace](https://huggingface.co/nvidia/NV-ReaSyn). Place `NV-ReaSyn-AR-166M-v1.ckpt` in the `data/trained_model` directory.
 
 ### Supervised Learning
 Run the following command to perform supervised training of ReaSyn:

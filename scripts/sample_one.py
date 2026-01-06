@@ -33,7 +33,7 @@ if __name__ == "__main__":
     t_start = time()
     df = run_sampling_one(
         input=input,
-        model_path='data/trained_model/model.ckpt',
+        model_path='data/trained_model/NV-ReaSyn-AR-166M-v1.ckpt',
         exhaustiveness=1,
         search_width=1,
     )
