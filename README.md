@@ -33,7 +33,7 @@ molecular optimization, and significantly outperforms previous synthesizable pro
 methods in synthesizable hit expansion. These results highlight ReaSyn’s
 superior ability to navigate combinatorially-large synthesizable chemical space.
 
-Find the Model Card++ for ReaSyn [here](model_card/model_card.md).
+Find the Model Card++ for ReaSyn [here](model_card/overview.md).
 
 ## Installation
 
