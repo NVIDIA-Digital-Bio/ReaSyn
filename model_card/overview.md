@@ -1,8 +1,5 @@
 ## Model Overview
 
-### Model NSpect ID
-NSPECT-NZMC-4JKB
-
 ### Description
 
 ReaSyn is a model for predicting the synthesis pathway, reaction steps from reactants to final product(s), for a target product molecule. When the target molecule cannot be synthesized directly using known reaction steps, ReaSyn will generate the pathways for the most structurally similar, synthesizable analog of the target molecule.The model uses an encoder-decoder Transformer architecture, where a full synthetic pathway is represented as a text sequence. ReaSyn v2 improves the reconstruction and projection capabilities of ReaSyn v1 using a more advanced search (by combining top-down and bottom-up tree traversal) in addition to an Edit Flow model that edits generated pathways via deletion, substitution, and insertion operations. This approach allows the model to achieve SOTA performance in tasks like synthesis planning and incorporating synthesizability into goal-directed molecular property optimization.
@@ -20,7 +17,7 @@ ReaSyn v2 is a model for predicting the synthetic pathway, reaction steps from r
 
 Release Date:  <br>
 Github 1/8/2025 via https://github.com/NVIDIA-Digital-Bio/ReaSyn <br>
-NGC 1/8/2025 via https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=1.0 <br> 
+NGC 1/8/2025 via https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=2.0 <br> 
 
 ### References
 Research paper: "Exploring Synthesizable Chemical Space with Iterative Pathway Refinements," https://arxiv.org/abs/2509.16084

@@ -85,7 +85,7 @@ python scripts/preprocess.py --model-config configs/preprocess_zinc250k.yml
 
 ## Training
 
-We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn) and HuggingFace ([AR](https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v2) and [EB](https://huggingface.co/nvidia/NV-ReaSyn-EB-174M-v2)). Place `NV-ReaSyn-AR-166M-v2.ckpt` and `NV-ReaSyn-EB-174M-v2.ckpt` in the `data/trained_model` directory.
+We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn) and HuggingFace ([AR](https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v2) and [EB](https://huggingface.co/nvidia/NV-ReaSyn-EB-174M-v2)). Place `nv-reasyn-ar-166m-v2.ckpt` and `nv-reasyn-eb-174m-v2.ckpt` in the `data/trained_model` directory.
 
 ### Autoregressive Model
 Run the following command to train ReaSyn's autoregressive model for bottom-up and top-down pathway generation:
@@ -107,7 +107,7 @@ Run the following command to prepare the training data for ReaSyn's Edit Bridge 
 python scripts/editflow_data_generate_x0.py -c configs/train_eb.yml -m ${pretrained_path} -d ${data_path}
 python scripts/editflow_data_align.py -c configs/train_eb.yml -d ${data_path}
 ```
-`pretrained_path` is the trained AR model path, e.g., `data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt`.<br>
+`pretrained_path` is the trained AR model path, e.g., `data/trained_model/nv-reasyn-ar-166m-v2.ckpt`.<br>
 Running the first command creates a temporary folder `data_path_x0`. You may delete this folder after running the second command.<br>
 Generating 10.5M data points with 120 NVIDIA A100 GPUs took ~3 days.
 
@@ -134,7 +134,7 @@ python scripts/sample.py -m ${model_path} -i ${testset_path} -o ${output_path} -
 # python scripts/sample.py -m ${model_path} -i data/test_zinc250k.txt -o results/zinc250k.txt --num_cycles 16 --add_bb_path data/processed/zinc250k_2048/fpindex.pkl
 python scripts/eval_recon.py ${output_path}
 ```
-`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt,data/trained_model/NV-ReaSyn-EB-174M-v2.ckpt`.<br>
+`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/nv-reasyn-ar-166m-v2.ckpt,data/trained_model/nv-reasyn-eb-174b-v2.ckpt`.<br>
 We recommend using multiple GPUs for parallelized synthesizable molecule reconstruction.
 
 ### Synthesizable Goal-directed Optimization of TDC Oracles
@@ -142,7 +142,7 @@ Run the following command to conduct synthesizable goal-directed optimization of
 ```bash
 python scripts/optimize_tdc.py -m ${model_path} -o ${oracle}
 ```
-`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt,data/trained_model/NV-ReaSyn-EB-174M-v2.ckpt`.
+`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/nv-reasyn-ar-166m-v2.ckpt,data/trained_model/nv-reasyn-eb-174b-v2.ckpt`.
 
 ### Synthesizable Hit Expansion
 Run the following command to conduct synthesizable hit expansion:
@@ -150,7 +150,7 @@ Run the following command to conduct synthesizable hit expansion:
 python scripts/sample.py -m ${model_path} -i data/jnk3_hit.txt -o ${output_path} --search_width 12 --exhaustiveness 128 --num_cycles 12 --no_exact_break
 python scripts/eval_hit.py ${output_path}
 ```
-`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt,data/trained_model/NV-ReaSyn-EB-174M-v2.ckpt`.
+`model_path` is a comma-separated string of the AR and EB model paths, e.g., `data/trained_model/nv-reasyn-ar-166m-v2.ckpt,data/trained_model/nv-reasyn-eb-174b-v2.ckpt`.
 
 ### (Optional) Filtering Pathways
 We additionally provide the functionality to filter out generated pathways that lead to molecules that users want to avoid (e.g., toxic molecules). We provide an example catalog of toxic molecules in `data/mols_to_filter.txt`. Set `mols_to_filter` and `filter_sim` arguments to filter synthetic pathways for molecules whose Tanimoto similarity to `mols_to_filter` is greater than `filter_sim`.<br>
@@ -163,6 +163,9 @@ python scripts/sample.py -m ${model_path} -i ${testset_path} -o ${output_path} -
 Copyright @ 2025, NVIDIA Corporation. All rights reserved.<br>
 The source code is made available under Apache-2.0.<br>
 The model weights are made available under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/).
+
+## Contributing
+This project is currently not accepting external contributions.
 
 ## Citation
 If you find this repository and our paper useful, we kindly request to cite our work.

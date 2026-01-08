@@ -8,3 +8,4 @@ oracle
 tmp*
 data/edit_bridge
 data/processed/zinc250k_2048
+poetry.lock
