@@ -27,7 +27,7 @@ if __name__ == "__main__":
     t_start = time()
     df = run_sampling_one(
         input=input,
-        model_path=['data/trained_model/NV-ReaSyn-AR-166M-v2.ckpt', 'data/trained_model/NV-ReaSyn-EB-174M-v2.ckpt'],
+        model_path=['data/trained_model/nv-reasyn-ar-166m-v2.ckpt', 'data/trained_model/nv-reasyn-eb-174m-v2.ckpt'],
         exhaustiveness=4,
         search_width=2,
         num_cycles=2,

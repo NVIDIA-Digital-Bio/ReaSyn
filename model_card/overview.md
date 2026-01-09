@@ -16,11 +16,14 @@ Use Case: <br>
 ReaSyn v2 is a model for predicting the synthetic pathway, reaction steps from reactants to final product(s), for a target product molecule. The model can be used in the pharmaceutical and chemical industries and in academic research to identify how to synthesize a molecule, help chemists in planning a first time synthesis of a molecule, the optimization of an existing synthesis pathway, or the filtering of candidate molecules based on ease of synthesis.  <br>
 
 Release Date:  <br>
-Github 1/8/2025 via https://github.com/NVIDIA-Digital-Bio/ReaSyn <br>
-NGC 1/8/2025 via https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=2.0 <br> 
+Github 1/8/2026 via https://github.com/NVIDIA-Digital-Bio/ReaSyn <br>
+NGC 1/8/2026 via https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/reasyn?version=2.0 <br> 
+Hugging Face 1/8/2026 via:
+- https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v2
+- https://huggingface.co/nvidia/NV-ReaSyn-EB-174M-v2 <br>
 
 ### References
-Research paper: "Exploring Synthesizable Chemical Space with Iterative Pathway Refinements," https://arxiv.org/abs/2509.16084
+Research paper: "Exploring Synthesizable Chemical Space with Iterative Pathway Refinements" https://arxiv.org/abs/2509.16084
 
 ### Model Architecture
 
