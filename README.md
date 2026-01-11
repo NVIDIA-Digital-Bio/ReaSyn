@@ -65,7 +65,7 @@ python scripts/preprocess.py --model-config configs/preprocess_zinc250k.yml
 
 ## Training
 
-We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/collections/reasyn/artifacts) and [HuggingFace](https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v1). Place `nv-reasyn-ar-166m-v1.ckpt` in the `data/trained_model` directory.
+We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/nv-reasyn-ar-166m-v1.ckpt?version=1.0) and [HuggingFace](https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v1). Place `nv-reasyn-ar-166m-v1.ckpt` in the `data/trained_model` directory.
 
 ### Supervised Learning
 Run the following command to perform supervised training of ReaSyn:
