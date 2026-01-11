@@ -85,7 +85,7 @@ python scripts/preprocess.py --model-config configs/preprocess_zinc250k.yml
 
 ## Training
 
-We provide the trained model checkpoint via [NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/collections/reasyn/artifacts) and HuggingFace ([AR](https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v2) and [EB](https://huggingface.co/nvidia/NV-ReaSyn-EB-174M-v2)). Place `nv-reasyn-ar-166m-v2.ckpt` and `nv-reasyn-eb-174m-v2.ckpt` in the `data/trained_model` directory.
+We provide the trained model checkpoint via NGC ([AR](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/nv-reasyn-ar-166m-v2.ckpt?version=2.0) and [EB](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/clara/resources/nv-reasyn-eb-174m-v2.ckpt?version=2.0)) and HuggingFace ([AR](https://huggingface.co/nvidia/NV-ReaSyn-AR-166M-v2) and [EB](https://huggingface.co/nvidia/NV-ReaSyn-EB-174M-v2)). Place `nv-reasyn-ar-166m-v2.ckpt` and `nv-reasyn-eb-174m-v2.ckpt` in the `data/trained_model` directory.
 
 ### Autoregressive Model
 Run the following command to train ReaSyn's autoregressive model for bottom-up and top-down pathway generation:
