@@ -131,22 +131,62 @@ class FingerprintIndex:
             results.append(res)
         return results
 
-    @functools.cache
     def fp_cuda(self, device: torch.device) -> torch.Tensor:
+        device = torch.device(device)
+        if device.type == "cuda" and device.index is None:
+            device = torch.device("cuda", torch.cuda.current_device())
+        return self._fp_cuda(device)
+
+    @functools.cache
+    def _fp_cuda(self, device: torch.device) -> torch.Tensor:
         return torch.tensor(self._fp, dtype=torch.float, device=device)
 
     @torch.no_grad()
-    def query_cuda(self, q: torch.Tensor | str, k: int) -> list[list[_QueryResult]]:
+    def query_cuda(
+        self,
+        q: torch.Tensor | str,
+        k: int,
+        device: torch.device | None = None,
+    ) -> list[list[_QueryResult]]:
         if isinstance(q, str):  # if mol is invalid, use edit distance instead
             bsz = 1
-            pwdist = torch.Tensor([editdistance.eval(q, s) for s in self._smiles])
+            # RapidFuzz computes identical Levenshtein distances in one C++/SIMD
+            # call. Falls back to editdistance if rapidfuzz is absent.
+            # REASYN_RAPIDFUZZ=0 restores the original loop for A/B measurement.
+            if os.environ.get('REASYN_RAPIDFUZZ', '1') != '0':
+                try:
+                    from rapidfuzz import process as _rf_process
+                    from rapidfuzz.distance import Levenshtein as _rf_lev
+                    dists = _rf_process.cdist([q], self._smiles,
+                                              scorer=_rf_lev.distance, workers=1)[0]
+                    pwdist = torch.Tensor(dists.astype('float32'))
+                except ImportError:
+                    pwdist = torch.Tensor([editdistance.eval(q, s) for s in self._smiles])
+            else:
+                pwdist = torch.Tensor([editdistance.eval(q, s) for s in self._smiles])
         else:
             bsz = q.size(0)
             q = q.reshape([-1, self._fp_option.dim])
-            pwdist = torch.cdist(self.fp_cuda(q.device), q, p=1)  # (n_mols, n_queries)
-        dist_t, idx_t = torch.topk(pwdist, k=k, dim=0, largest=False)  # (k, n_queries)
-        dist = dist_t.t().reshape([bsz, -1]).cpu().numpy()
-        idx = idx_t.t().reshape([bsz, -1]).cpu().numpy()
+            # Use the caller's model device; an existing CUDA query takes precedence.
+            # REASYN_GPU_QUERY=0 restores the original path for A/B measurement.
+            if os.environ.get('REASYN_GPU_QUERY', '1') != '0' and torch.cuda.is_available():
+                if q.is_cuda:
+                    dev = q.device
+                elif device is not None:
+                    dev = device
+                else:
+                    dev = torch.device("cuda", torch.cuda.current_device())
+                dev = torch.device(dev)
+                if dev.type == "cuda" and dev.index is None:
+                    dev = torch.device("cuda", torch.cuda.current_device())
+                q = q.to(dev)
+            else:
+                dev = q.device
+            pwdist = torch.cdist(self.fp_cuda(dev), q, p=1)  # (n_mols, n_queries)
+        # Keep legacy CPU topk tie-breaking while calculating distances on the GPU.
+        dist_t, idx_t = torch.topk(pwdist.cpu(), k=k, dim=0, largest=False)  # (k, n_queries)
+        dist = dist_t.t().reshape([bsz, -1]).numpy()
+        idx = idx_t.t().reshape([bsz, -1]).numpy()
 
         results: list[list[_QueryResult]] = []
         for i in range(dist.shape[0]):

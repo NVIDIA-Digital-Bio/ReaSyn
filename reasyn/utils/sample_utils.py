@@ -86,17 +86,18 @@ def get_reactants(
         mol: str | Molecule,
         fpindex: FingerprintIndex,
         topk=1,
-        use_edit_distance: bool = False) -> list[list[_ReactantItem]]:
+        use_edit_distance: bool = False,
+        device: torch.device | None = None) -> list[list[_ReactantItem]]:
     if isinstance(mol, str):
         mol = Molecule(mol)
     
     if mol._rdmol is None:
         if not use_edit_distance:
             return None
-        query_res = fpindex.query_cuda(q=mol.smiles, k=topk)[0]
+        query_res = fpindex.query_cuda(q=mol.smiles, k=topk, device=device)[0]
     else:
         fp = torch.Tensor(mol.get_fingerprint(option=fpindex._fp_option))
-        query_res = fpindex.query_cuda(q=fp[None, :], k=topk)[0]
+        query_res = fpindex.query_cuda(q=fp[None, :], k=topk, device=device)[0]
     mols = np.array([q.molecule for q in query_res])
     mol_idxs = np.array([q.index for q in query_res])
     distances = np.array([q.distance for q in query_res])

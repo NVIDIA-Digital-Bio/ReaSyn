@@ -203,7 +203,13 @@ class Sampler:
                 token_sampled, _ = _sample_token(tokens)
                 token_sampled_bb.append(token_sampled)
             smiles = decode_smiles(token_sampled_bb)
-            sampled_item = get_reactants(smiles, fpindex=self._fpindex, topk=100, use_edit_distance=use_edit_distance)
+            sampled_item = get_reactants(
+                smiles,
+                fpindex=self._fpindex,
+                topk=100,
+                use_edit_distance=use_edit_distance,
+                device=self.device,
+            )
             if sampled_item is None:
                 sampled_type = 'ABORTED'
         elif token_sampled >= TokenType.RXN_MIN:
@@ -406,7 +412,13 @@ class Sampler:
                     success = state.stack.push_rxn(rxn, rxn_idx)
                     if not success: break
                 else:
-                    sample = get_reactants(sample, fpindex=self._fpindex, topk=1, use_edit_distance=use_edit_distance)
+                    sample = get_reactants(
+                        sample,
+                        fpindex=self._fpindex,
+                        topk=1,
+                        use_edit_distance=use_edit_distance,
+                        device=self.device,
+                    )
                     if sample is None: break
                     sample = sample[0]
                     mol, mol_idx = sample.reactant, sample.index
