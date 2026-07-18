@@ -99,5 +99,8 @@ class Decoder(nn.Module):
             tgt_mask=causal_mask,
             tgt_key_padding_mask=tgt_key_padding_mask,
             memory_key_padding_mask=code_padding_mask,
+            # Pass is_causal explicitly so nn.TransformerDecoder skips _detect_is_causal_mask,
+            # whose GPU-to-host scalar check adds latency and prevents CUDA-graph capture.
+            tgt_is_causal=bool(self.use_causal_mask),
         )   # (bsz, seq_len, d_model)
         return y

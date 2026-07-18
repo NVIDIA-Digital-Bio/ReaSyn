@@ -37,6 +37,7 @@ from reasyn.utils.sample_utils import get_reactants, get_reactions, \
 
 
 RXN_PATTERN = re.compile('R\d+')
+MAX_CUDAGRAPH_CACHE_SIZE = 3
 
 
 class Sampler:
@@ -77,6 +78,13 @@ class Sampler:
         # Pad AR forwards to power-of-2 batch / 64-multiple seq so cuBLAS/cuDNN reuse
         # kernels across the search's constantly-varying shapes (~7x fewer re-selections).
         self._bucket_ar = os.environ.get('REASYN_BUCKET', '1') != '0'
+        # Capture a CUDA graph per bucket shape (encoder `code` is constant within a
+        # Sampler, so it is baked in). Requires bucketing + bf16. Opt-in.
+        self._cudagraph = (os.environ.get('REASYN_CUDAGRAPH', '0') == '1'
+                           and self._batched_ar and self._bucket_ar and self._use_bf16
+                           and self.device.type == 'cuda')
+        self._graph_cache: dict = {}
+        self._graph_stream = None
 
         # input filtering
         if self._mols_to_filter is not None and \
@@ -250,10 +258,15 @@ class Sampler:
         gather = torch.tensor([l - 1 for l in lens] + [0] * (Bp - B),
                               dtype=torch.long, device=device)
 
+        if getattr(self, '_cudagraph', False):
+            logits = self._run_ar_graph(code, code_padding_mask, batch, gather, Bp, Lp)
+            with torch.cuda.device(self.device):
+                return logits[:B].to(torch.float32, copy=True)
+
         codeB = code.expand(Bp, *code.shape[1:])
         maskB = code_padding_mask.expand(Bp, *code_padding_mask.shape[1:])
         if self._use_bf16:
-            with torch.autocast('cuda', dtype=torch.bfloat16):
+            with torch.autocast('cuda', dtype=torch.bfloat16, cache_enabled=False):
                 logits = self.model.sample(code=codeB, code_padding_mask=maskB,
                                            tokens=batch, token_padding_mask=None,
                                            gather_idx=gather)
@@ -261,7 +274,92 @@ class Sampler:
             logits = self.model.sample(code=codeB, code_padding_mask=maskB,
                                        tokens=batch, token_padding_mask=None,
                                        gather_idx=gather)
-        return logits[:B].float()
+        return logits[:B].to(torch.float32, copy=True)
+
+    def _run_ar_graph(self, code, code_padding_mask, batch, gather, Bp, Lp) -> torch.Tensor:
+        """Replay a captured CUDA graph for this (Bp, Lp) shape. The encoder memory
+        (code/mask) is constant within a Sampler so it is baked into the graph; only
+        the token / gather-index static buffers are updated per call. Hot cached shapes
+        amortize capture over the hundreds of forwards the search issues at that shape."""
+        key = (Bp, Lp)
+        e = self._graph_cache.pop(key, None)
+        if e is not None:
+            # Plain dicts preserve insertion order: reinsert hits for LRU eviction.
+            self._graph_cache[key] = e
+        if e is None:
+            with torch.cuda.device(self.device):
+                if len(self._graph_cache) >= MAX_CUDAGRAPH_CACHE_SIZE:
+                    torch.cuda.synchronize(self.device)
+                    oldest_key = next(iter(self._graph_cache))
+                    oldest = self._graph_cache.pop(oldest_key)
+                    self._reset_graph_entry(oldest)
+                    torch.cuda.empty_cache()
+
+                s_code = code.expand(Bp, *code.shape[1:])
+                s_mask = code_padding_mask.expand(Bp, *code_padding_mask.shape[1:])
+                s_tok = torch.zeros((Bp, Lp), dtype=torch.long, device=self.device)
+                s_gi = torch.zeros((Bp,), dtype=torch.long, device=self.device)
+                s_tok.copy_(batch); s_gi.copy_(gather)
+
+                def _run():
+                    return self.model.sample(code=s_code, code_padding_mask=s_mask,
+                                             tokens=s_tok, token_padding_mask=None, gather_idx=s_gi)
+
+                if self._graph_stream is None:
+                    self._graph_stream = torch.cuda.Stream(device=self.device)
+
+                # Torch 2.7 only documents shared-pool safety when replay order matches
+                # capture order. Search order is arbitrary, so use independent pools and
+                # cap them with the LRU above. Captures still share one device-bound stream.
+                current = torch.cuda.current_stream(self.device)
+                self._graph_stream.wait_stream(current)
+                with torch.cuda.stream(self._graph_stream):
+                    with torch.no_grad(), torch.autocast(
+                            'cuda', dtype=torch.bfloat16, cache_enabled=False):
+                        for _ in range(3):
+                            _run()
+                current.wait_stream(self._graph_stream)
+                g = torch.cuda.CUDAGraph()
+                with torch.no_grad(), torch.autocast(
+                        'cuda', dtype=torch.bfloat16, cache_enabled=False), torch.cuda.graph(
+                            g, stream=self._graph_stream):
+                    s_out = _run()
+                e = dict(g=g, s_tok=s_tok, s_gi=s_gi, s_out=s_out,
+                         s_code=s_code, s_mask=s_mask)
+                self._graph_cache[key] = e
+
+        with torch.cuda.device(self.device):
+            e['s_tok'].copy_(batch)
+            e['s_gi'].copy_(gather)
+            e['g'].replay()
+        return e['s_out']
+
+    @staticmethod
+    def _reset_graph_entry(entry: dict) -> None:
+        graph = entry.pop('g', None)
+        if graph is not None:
+            graph.reset()
+        entry.clear()
+
+    def _clear_graph_cache(self) -> None:
+        """Release per-molecule graphs and return their pools to the CUDA allocator."""
+        has_graph_state = bool(self._graph_cache) or self._graph_stream is not None
+        if not has_graph_state:
+            return
+        if self.device.type != 'cuda':
+            self._graph_cache.clear()
+            self._graph_stream = None
+            return
+        with torch.cuda.device(self.device):
+            torch.cuda.synchronize(self.device)
+            while self._graph_cache:
+                _, entry = self._graph_cache.popitem()
+                self._reset_graph_entry(entry)
+                del entry
+            self._graph_stream = None
+            # One graph-enabled worker owns each GPU, so returning unused cached
+            # blocks here cannot disrupt another worker on the same device.
+            torch.cuda.empty_cache()
 
     @torch.no_grad()
     def _predict_ar_batched(
@@ -367,7 +465,15 @@ class Sampler:
         # The legacy path retains its original per-state deadline checks below.
         if self._batched_ar and time_limit is not None and time_limit.exceeded():
             return
-        
+
+        if gpu_lock is not None:
+            gpu_lock.acquire()
+            try:
+                return self._evolve_ar_singlestep(
+                    gpu_lock=None, time_limit=time_limit, sampling_direction=sampling_direction)
+            finally:
+                gpu_lock.release()
+
         feat_list = [
             featurize_stack(
                 state.stack,
@@ -376,15 +482,6 @@ class Sampler:
             )
             for state in self._active
         ]
-        
-        if gpu_lock is not None:
-            gpu_lock.acquire()
-
-        # Acquiring a shared GPU lock may itself cross the deadline.
-        if self._batched_ar and time_limit is not None and time_limit.exceeded():
-            if gpu_lock is not None:
-                gpu_lock.release()
-            return
 
         code, code_padding_mask = self.code
 
@@ -426,17 +523,17 @@ class Sampler:
                 if sampling_direction == 'td':
                     if sampled_type == 'END':
                         finished.append(base_state)
-                    
+
                     elif sampled_type == 'BB' or sampled_type == 'RXN':
                         mol_or_rxn, idx, score = sampled_item[i]
                         new_state = copy.deepcopy(base_state)
                         new_state.stack.push_topdown(mol_or_rxn, idx)
                         new_state.scores.append(score)
                         next.append(new_state)
-                    
+
                     else:
                         self._aborted.append(base_state)
-                
+
                 else:
                     if sampled_type == 'END':
                         finished.append(base_state)
@@ -481,13 +578,10 @@ class Sampler:
         del self._active
         self._active = next
         self._sort_states()
-        
+
         if sampling_direction == 'td':
             [state.stack.final_seq_topdown() for state in finished]
         self._add_finished_states(finished)
-
-        if gpu_lock is not None:
-            gpu_lock.release()
 
     @torch.inference_mode()
     def _predict_editflow(
