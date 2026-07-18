@@ -87,14 +87,16 @@ class Worker(mp.Process):
 
     def run(self) -> None:
         os.sched_setaffinity(0, range(os.cpu_count() or 1))
-        
+        device = torch.device(f"cuda:{self._gpu_id}")
+        torch.cuda.set_device(device)
+
         assert isinstance(self._model_path, list) and len(self._model_path) == 2
     
         self._model = []
         for _model_path in self._model_path:
             ckpt = torch.load(_model_path, map_location="cpu")
             config = OmegaConf.create(ckpt["hyper_parameters"]["config"])
-            _model = ReaSyn(config.model).to(f"cuda:{self._gpu_id}")
+            _model = ReaSyn(config.model).to(device)
             _model.load_state_dict({k[6:]: v for k, v in ckpt["state_dict"].items()})
             _model.eval()
             self._model.append(_model)
@@ -117,11 +119,16 @@ class Worker(mp.Process):
                 break
             try:
                 result_df = self.process(next_task)
-                self._task_queue.task_done()
-                self._result_queue.put((next_task, result_df))
             except KeyboardInterrupt:
                 print(f"{self.name}: Exiting due to KeyboardInterrupt")
                 return
+            except Exception as e:
+                print(f'{self.name}: Failed {next_task.csmiles}')
+                print(e)
+                result_df = None
+            finally:
+                self._task_queue.task_done()
+            self._result_queue.put((next_task, result_df))
             
     def process(self, mol: Molecule):
         sampler = Sampler(
@@ -151,6 +158,8 @@ class Worker(mp.Process):
         except Exception as e:
             print(f'{mol.csmiles}')
             print(e)
+        finally:
+            sampler._clear_graph_cache()
         
 
 class WorkerPool:
@@ -163,6 +172,12 @@ class WorkerPool:
         **worker_opt,
     ) -> None:
         super().__init__()
+        graph_enabled = (os.environ.get('REASYN_CUDAGRAPH', '0') == '1'
+                         and os.environ.get('REASYN_BATCHED_AR', '1') != '0'
+                         and os.environ.get('REASYN_BUCKET', '1') != '0'
+                         and os.environ.get('REASYN_BF16', '1') != '0')
+        if graph_enabled and num_workers_per_gpu != 1:
+            raise ValueError('REASYN_CUDAGRAPH=1 requires num_workers_per_gpu=1')
         self._task_queue: TaskQueueType = mp.JoinableQueue(task_qsize)
         self._result_queue: ResultQueueType = mp.Queue(result_qsize)
         self._gpu_ids = [str(d) for d in gpu_ids]
@@ -404,12 +419,15 @@ def run_sampling_one(
     )
     tl = TimeLimit(time_limit)
     t_start = time.time()
-    sampler.evolve(gpu_lock=None, time_limit=tl,
-                    num_cycles=num_cycles,
-                    max_evolve_steps=max_evolve_steps,
-                    num_editflow_samples=num_editflow_samples,
-                    num_editflow_steps=num_editflow_steps)
-    t_elapsed = time.time() - t_start
-    df = sampler.get_dataframe()[: max_results]
-    df['time'] = t_elapsed
-    return df
+    try:
+        sampler.evolve(gpu_lock=None, time_limit=tl,
+                       num_cycles=num_cycles,
+                       max_evolve_steps=max_evolve_steps,
+                       num_editflow_samples=num_editflow_samples,
+                       num_editflow_steps=num_editflow_steps)
+        t_elapsed = time.time() - t_start
+        df = sampler.get_dataframe()[: max_results]
+        df['time'] = t_elapsed
+        return df
+    finally:
+        sampler._clear_graph_cache()
