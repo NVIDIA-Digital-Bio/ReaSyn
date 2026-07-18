@@ -25,6 +25,7 @@ rdkit = "2025.3.2"
 numpy = "1.26.4"
 scikit-learn = "1.2.2"
 editdistance = "0.8.1"
+rapidfuzz = "3.14.5"
 torchtyping = "0.1.5"
 
 [build-system]
