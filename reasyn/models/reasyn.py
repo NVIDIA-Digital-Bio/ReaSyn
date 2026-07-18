@@ -87,6 +87,7 @@ class ReaSyn(nn.Module):
         tokens: torch.Tensor,
         token_padding_mask: torch.Tensor | None,
         t: torch.Tensor | None = None,  # for EditFlow
+        gather_idx: torch.Tensor | None = None,  # AR: per-row index of the last real token
     ) -> torch.Tensor:
         h = self.decoder(
             code=code,
@@ -101,6 +102,11 @@ class ReaSyn(nn.Module):
             sub_logits = self.sub_out(h)
             return ut, ins_logits, sub_logits
         if self.model_type == 'autoregressive':
-            h = h[:, -1]    # (1, h_dim)
+            if gather_idx is not None:
+                # Batched decoding: right-padded rows have their last real token at
+                # position (length-1), not at index -1. Gather per row.
+                h = h[torch.arange(h.size(0), device=h.device), gather_idx]  # (B, h_dim)
+            else:
+                h = h[:, -1]    # (1, h_dim)  — unbatched / full-length prefix
         logits = self.token_head(h)
         return logits

@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import re
 import copy
 from collections.abc import Iterable
@@ -69,7 +70,14 @@ class Sampler:
         self.exact_break = exact_break
         self._mols_to_filter = mols_to_filter
         self._filter_sim = filter_sim
-        
+        # Batched AR decoding (env-toggleable for A/B against the original per-state loop).
+        # REASYN_BATCHED_AR=0 -> original one-state-at-a-time path; REASYN_BF16=1 -> bf16 forward.
+        self._batched_ar = os.environ.get('REASYN_BATCHED_AR', '1') != '0'
+        self._use_bf16 = os.environ.get('REASYN_BF16', '0') != '0'
+        # Pad AR forwards to power-of-2 batch / 64-multiple seq so cuBLAS/cuDNN reuse
+        # kernels across the search's constantly-varying shapes (~7x fewer re-selections).
+        self._bucket_ar = os.environ.get('REASYN_BUCKET', '1') != '0'
+
         # input filtering
         if self._mols_to_filter is not None and \
             max([self._mol.sim(f) for f in self._mols_to_filter] or [-1]) > self._filter_sim:
@@ -216,6 +224,136 @@ class Sampler:
         
         return PredictResult(sampled_type, sampled_item)
 
+    def _forward_ar_batched(self, code, code_padding_mask, seq_lists: list[list[int]]) -> torch.Tensor:
+        """One batched decoder forward over CPU int-list prefixes. Right-pads on CPU,
+        moves to device in a single H2D copy (no per-lane GPU<->CPU syncs), and gathers
+        per-row last-real-token logits. Returns (B, vocab) in fp32.
+
+        Shape bucketing (REASYN_BUCKET): the search feeds a new (batch, seq) shape on
+        almost every call, so cuBLAS/cuDNN re-selects algorithms per shape (~7x overhead
+        measured). Padding batch to a power-of-2 and seq to a 64-multiple collapses the
+        distinct-shape count so kernels are reused. Extra rows/cols are ignored via gather
+        + causal masking, so results are identical (the pad mask is redundant: the gathered
+        last-real-token position is causally isolated from the right-padded future)."""
+        device = self.device
+        lens = [len(s) for s in seq_lists]
+        B = len(seq_lists)
+        Lmax = max(lens)
+        if self._bucket_ar:
+            Bp = 1 << max(0, (B - 1)).bit_length()                    # next power of two
+            Lp = min(((Lmax + 63) // 64) * 64, self.model.max_len)    # next multiple of 64
+        else:
+            Bp, Lp = B, Lmax
+        padded = [s + [0] * (Lp - len(s)) for s in seq_lists]
+        padded += [[0] * Lp for _ in range(Bp - B)]                   # dummy rows -> ignored
+        batch = torch.tensor(padded, dtype=torch.long, device=device)            # one H2D
+        gather = torch.tensor([l - 1 for l in lens] + [0] * (Bp - B),
+                              dtype=torch.long, device=device)
+
+        codeB = code.expand(Bp, *code.shape[1:])
+        maskB = code_padding_mask.expand(Bp, *code_padding_mask.shape[1:])
+        if self._use_bf16:
+            with torch.autocast('cuda', dtype=torch.bfloat16):
+                logits = self.model.sample(code=codeB, code_padding_mask=maskB,
+                                           tokens=batch, token_padding_mask=None,
+                                           gather_idx=gather)
+        else:
+            logits = self.model.sample(code=codeB, code_padding_mask=maskB,
+                                       tokens=batch, token_padding_mask=None,
+                                       gather_idx=gather)
+        return logits[:B].float()
+
+    @torch.no_grad()
+    def _predict_ar_batched(
+        self,
+        code: torch.Tensor | None,
+        code_padding_mask: torch.Tensor | None,
+        tokens_list: list[list[int]],
+        temperature_token: float = 0.1,
+        use_edit_distance: bool = True,
+        sampling_direction: str = 'bu',
+    ) -> list[PredictResult]:
+        """Batched equivalent of _predict_ar over all active states at once.
+
+        Batches the GPU forwards (outer draw + inner BB-SMILES loop) while keeping the
+        chemistry callbacks (get_reactants/get_reactions) per-state. Token bookkeeping
+        stays on CPU as int-lists so each character-step incurs exactly one H2D (batch
+        build) and one D2H (sample readout) sync regardless of batch size. Numerically
+        equivalent to _predict_ar up to RNG-draw-order and bf16 (validated distributionally)."""
+        MOL_START, MOL_END = int(TokenType.MOL_START), int(TokenType.MOL_END)
+        RXN_MIN, RXN_MAX = int(TokenType.RXN_MIN), int(TokenType.RXN_MAX)
+        max_len = self.model.max_len
+        N = len(tokens_list)
+        results: list[PredictResult | None] = [None] * N
+
+        # CPU int-lists; immediate aborts (prefix over budget) excluded from the batch.
+        act: list[int] = []
+        seqs: list[list[int]] = []
+        for k in range(N):
+            L = len(tokens_list[k])
+            if L > max_len:
+                results[k] = PredictResult('ABORTED', None)
+            else:
+                act.append(k)
+                seqs.append(tokens_list[k])
+        if not act:
+            return results
+
+        def _sample(logits, td_first_idx=None) -> list[int]:
+            if td_first_idx:
+                logits = logits.clone()
+                for i in td_first_idx:
+                    logits[i, :RXN_MIN] = -torch.inf  # TD first token must be a reaction
+            probs = torch.nn.functional.softmax(logits / temperature_token, dim=-1)
+            return torch.multinomial(probs, num_samples=1).squeeze(-1).tolist()  # one D2H
+
+        # ---- Outer draw (one batched forward over all active states) ----
+        logits0 = self._forward_ar_batched(code, code_padding_mask, seqs)  # (A, vocab)
+        td_first_idx = [i for i, s in enumerate(seqs)
+                        if sampling_direction == 'td' and len(s) == 1]
+        tok0 = _sample(logits0, td_first_idx or None)  # list[int]
+
+        # ---- Classify each active row (pure CPU) ----
+        is_bb = [tok0[i] == MOL_START or seqs[i][-1] == MOL_START for i in range(len(seqs))]
+        is_rxn = [(not is_bb[i]) and tok0[i] >= RXN_MIN for i in range(len(seqs))]
+
+        # ---- Batched inner BB-SMILES loop (lane-masked, CPU token bookkeeping) ----
+        bb_rows = [i for i in range(len(seqs)) if is_bb[i]]
+        bb_tokens: dict[int, list[int]] = {i: [tok0[i]] for i in bb_rows}
+        ctx: dict[int, list[int]] = {i: list(seqs[i]) for i in bb_rows}
+        prev: dict[int, int] = {i: tok0[i] for i in bb_rows}
+
+        def _cont(i):
+            return prev[i] != MOL_END and len(ctx[i]) < max_len - 2
+
+        active_bb = [i for i in bb_rows if _cont(i)]
+        while active_bb:
+            for i in active_bb:
+                ctx[i].append(prev[i])  # append previous token to context
+            logits = self._forward_ar_batched(code, code_padding_mask, [ctx[i] for i in active_bb])
+            samp = _sample(logits)  # list[int]
+            for j, i in enumerate(active_bb):
+                prev[i] = samp[j]
+                bb_tokens[i].append(samp[j])
+            active_bb = [i for i in bb_rows if _cont(i)]
+
+        # ---- Per-state chemistry (CPU): assemble PredictResult per active row ----
+        for i in range(len(seqs)):
+            k = act[i]
+            if is_bb[i]:
+                smiles = decode_smiles(bb_tokens[i])
+                item = get_reactants(smiles, fpindex=self._fpindex, topk=100,
+                                     use_edit_distance=use_edit_distance)
+                results[k] = PredictResult('BB' if item is not None else 'ABORTED', item)
+            elif is_rxn[i]:
+                reaction_logits = logits0[i, RXN_MIN:RXN_MAX + 1]  # (115,)
+                item = get_reactions(reaction_logits, rxn_matrix=self._rxn_matrix)
+                results[k] = PredictResult('RXN', item)
+            else:
+                results[k] = PredictResult('END', None)
+
+        return results
+
     def _evolve_ar_singlestep(
         self,
         gpu_lock: Lock | None = None,
@@ -223,6 +361,11 @@ class Sampler:
         sampling_direction: str = 'bu'
     ) -> None:
         if len(self._active) == 0:
+            return
+
+        # Batched prediction is atomic: do not start it after the deadline.
+        # The legacy path retains its original per-state deadline checks below.
+        if self._batched_ar and time_limit is not None and time_limit.exceeded():
             return
         
         feat_list = [
@@ -237,26 +380,48 @@ class Sampler:
         if gpu_lock is not None:
             gpu_lock.acquire()
 
+        # Acquiring a shared GPU lock may itself cross the deadline.
+        if self._batched_ar and time_limit is not None and time_limit.exceeded():
+            if gpu_lock is not None:
+                gpu_lock.release()
+            return
+
         code, code_padding_mask = self.code
+
+        # Build per-state token prefixes (with the BU MOL_START seed) once.
+        tokens_list: list[list[int]] = []
+        for feat in feat_list:
+            tokens = feat['tokens'].tolist()
+            if sampling_direction == 'bu' and len(tokens) == 1:  # for BU
+                tokens.append(int(TokenType.MOL_START))
+            tokens_list.append(tokens)
+
+        # Batched path: one set of batched forwards for all active states.
+        results_list = (
+            self._predict_ar_batched(
+                code=code, code_padding_mask=code_padding_mask,
+                tokens_list=tokens_list, sampling_direction=sampling_direction)
+            if self._batched_ar else None
+        )
 
         finished: list[State] = []
         next: list[State] = []
-        for feat, base_state in zip(feat_list, self._active):
-            if time_limit is not None and time_limit.exceeded():
+        for k, base_state in enumerate(self._active):
+            if results_list is None and time_limit is not None and time_limit.exceeded():
                 break
-            
-            tokens = feat['tokens'].to(self.device)
-            if sampling_direction == 'bu' and len(tokens) == 1: # for BU
-                tokens = torch.hstack([tokens, torch.tensor([TokenType.MOL_START]).to(self.device)])
-        
-            result = self._predict_ar(
-                code=code,
-                code_padding_mask=code_padding_mask,
-                tokens=tokens,
-                sampling_direction=sampling_direction
-            )
+
+            if results_list is not None:
+                result = results_list[k]
+            else:
+                tokens = torch.tensor(tokens_list[k], dtype=torch.long, device=self.device)
+                result = self._predict_ar(
+                    code=code,
+                    code_padding_mask=code_padding_mask,
+                    tokens=tokens,
+                    sampling_direction=sampling_direction,
+                )
             sampled_type, sampled_item = result.sampled_type, result.sampled_item
-            
+
             for i in range(self._factor):
                 if sampling_direction == 'td':
                     if sampled_type == 'END':
